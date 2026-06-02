@@ -61,3 +61,23 @@
 - **修改** `stepper_motor_sdk/stepper_motor_sdk/motor.py:211`
   - `get_torque()` 先读 `sub=1`（CiA 402 标准），失败后回退 `sub=0`（flat object）
   - 均失败则静默返回 0，不刷日志
+
+### Bug 修复 — 摄像头串流 & 前端
+
+- **修复** `robot_control/web_gui/server.py:161-177`
+  - `/stream` MJPEG 端点增加 5 秒超时：摄像头设备不可用时（如被 RTMP 占用），不再无限挂起浏览器
+  - 每收到一帧重置倒计时，持续有帧则持续推送
+  - 添加帧计数日志（每 150 帧 ~10s 输出一条）
+- **修复** `robot_control/web_gui/server.py:185`
+  - Camera watchdog 条件 `or` → `and`：有人正在观看时不会被误切断
+- **修复** `robot_control/web_gui/static/app.js:74`
+  - WebRTC `ontrack` 逻辑：不再在 SRS API 连接成功后就隐藏 MJPEG
+  - 只有真正收到视频轨道时才切换为 WebRTC 画面
+  - 8 秒无视频轨道自动回退 MJPEG 模式
+- **修复** `robot_control/web_gui/static/style.css:284`
+  - 摄像头画面 img/video 改为 `position: absolute; top: 0; left: 0`，避免布局偏移导致画面被裁切
+
+### 运维
+
+- **新增** `guide/backup_guide.md` — 备份操作流程
+- `robot_control_panel.service` — systemd 自动重启，日志路径 `/var/log/robot_control_panel.log`

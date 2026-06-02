@@ -30,13 +30,6 @@ function _switchToVideo() {
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
 
-    pc.ontrack = (evt) => {
-      cameraVideo.srcObject = evt.streams[0];
-      _switchToVideo();
-      camStatus.textContent = "WebRTC ✓";
-      camStatus.className = "badge connected";
-    };
-
     pc.oniceconnectionstatechange = () => {
       if (pc.iceConnectionState === "disconnected" ||
           pc.iceConnectionState === "failed") {
@@ -74,7 +67,19 @@ function _switchToVideo() {
     await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
     camStatus.textContent = "WebRTC 协商中";
     camStatus.className = "badge";
-    cameraImg.style.display = "none";   // hide MJPEG while trying WebRTC
+    // Keep MJPEG visible until ontrack actually fires.
+    // If no video track within 8 s, assume the stream is empty and stay on MJPEG.
+    let _fallbackTimer = setTimeout(() => {
+      camStatus.textContent = "MJPEG";
+      camStatus.className = "badge";
+    }, 8000);
+    pc.ontrack = (evt) => {
+      clearTimeout(_fallbackTimer);
+      cameraVideo.srcObject = evt.streams[0];
+      _switchToVideo();
+      camStatus.textContent = "WebRTC ✓";
+      camStatus.className = "badge connected";
+    };
   } catch (e) {
     console.log("WebRTC camera fallback — " + e.message);
     camStatus.textContent = "MJPEG";

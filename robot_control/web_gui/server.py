@@ -93,7 +93,9 @@ class _CameraBroadcaster:
             proc = None
             try:
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                log.info("[Camera] ffmpeg started (pid=%d)", proc.pid)
                 buf = b""
+                frame_n = 0
                 while self._running:
                     chunk = proc.stdout.read(4096)
                     if not chunk:
@@ -110,6 +112,10 @@ class _CameraBroadcaster:
                                  + frame + b"\r\n")
                         with self._lock:
                             self._frame = msg
+                            frame_n += 1
+                            if frame_n % 150 == 1:   # log every ~10 s at 15 fps
+                                log.info("[Camera] frame #%d (%d bytes), %d client(s)",
+                                         frame_n, len(frame), len(self._clients))
                             for q in self._clients.values():
                                 q.append(msg)
             except Exception as exc:
@@ -159,13 +165,23 @@ _broadcaster = _CameraBroadcaster()
 
 
 def _gen_client_stream(q):
+    """Yield frames from queue. Bails out after 5 s if no frame arrives,
+    so the browser <img> tag doesn't spin forever when the camera is gone."""
+    deadline = time.time() + 5
+    count = 0
     try:
         while True:
             if q:
                 yield q.pop(0)
+                count += 1
+                deadline = time.time() + 5  # reset countdown on each frame
+            elif time.time() > deadline:
+                log.info("[Camera] /stream: timeout — sent %d frames", count)
+                return
             else:
-                time.sleep(0.005)
+                time.sleep(0.05)
     except GeneratorExit:
+        log.info("[Camera] /stream: client disconnected — sent %d frames", count)
         raise
 
 
@@ -177,7 +193,7 @@ def _camera_watchdog():
             timeout_sec = float(auth.get_setting("camera_timeout_min", "5")) * 60
             no_subs     = _broadcaster.client_count() == 0
             no_activity = (time.time() - _last_activity) > timeout_sec
-            if no_subs or no_activity:
+            if no_subs and no_activity:
                 log.info("[Camera] Watchdog: stopping ffmpeg (idle)")
                 _broadcaster.stop()
         except Exception as e:
@@ -190,11 +206,15 @@ def _camera_watchdog():
 @auth.login_required
 def camera_stream():
     q = _broadcaster.subscribe()
+    log.info("[Camera] /stream: client subscribed (clients=%d)",
+             _broadcaster.client_count())
     def generate():
         try:
             yield from _gen_client_stream(q)
         finally:
             _broadcaster.unsubscribe(q)
+            log.info("[Camera] /stream: client unsubscribed (clients=%d)",
+                     _broadcaster.client_count())
     return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
