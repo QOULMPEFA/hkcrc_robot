@@ -1,0 +1,9 @@
+services:
+  srs:
+    image: ossrs/srs:6
+    container_name: srs-webrtc
+    restart: always
+    network_mode: "host"
+    command: "./objs/srs -c conf/srs.conf"
+    volumes:
+      - ./srs.conf:/usr/local/srs/conf/srs.conf:ro

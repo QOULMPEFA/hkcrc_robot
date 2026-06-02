@@ -1,0 +1,6 @@
+flask>=3.0.0
+flask-socketio>=5.3.6
+python-socketio>=5.11.0
+python-engineio>=4.9.0
+# stepper_motor_sdk is a local package — install via:
+#   pip install -e ../stepper_motor_sdk

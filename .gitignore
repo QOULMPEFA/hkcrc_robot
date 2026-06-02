@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+
+# Databases & logs
+*.db
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Third-party test frameworks
+ugv_sdk/test/googletest/
+
+# Docker / runtime data
+camera_sdk/srs/prompt_srs_setup.md
+
+# OS
+.DS_Store
+Thumbs.db
+arm_ur5r_sdk/sdk-1.18.0.zip

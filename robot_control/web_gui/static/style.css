@@ -1,0 +1,507 @@
+/* ── reset & base ─────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0f1117;
+  --surface:   #1a1d27;
+  --border:    #2e3147;
+  --accent:    #4f8ef7;
+  --accent2:   #34c98a;
+  --warn:      #f7a94f;
+  --danger:    #f75f5f;
+  --text:      #e2e4ef;
+  --muted:     #7a7f9a;
+  --radius:    10px;
+  --gap:       16px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+}
+
+/* ── header ──────────────────────────────────────────────────────────────── */
+header {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: 12px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  flex: 1;
+}
+
+/* ── badge ───────────────────────────────────────────────────────────────── */
+.badge {
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.badge.connected    { background: #1a3d2b; color: var(--accent2); }
+.badge.disconnected { background: #3d1a1a; color: var(--danger); }
+.badge.fault        { background: #3d2a1a; color: var(--warn); }
+
+/* ── emergency stop ──────────────────────────────────────────────────────── */
+.btn-estop {
+  background: var(--danger);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+  transition: opacity 0.15s;
+}
+.btn-estop:hover  { opacity: 0.85; }
+.btn-estop:active { opacity: 0.7; }
+
+/* ── main grid ───────────────────────────────────────────────────────────── */
+main {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--gap);
+  padding: var(--gap) 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* ── card ────────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.card h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stub-card { opacity: 0.75; }
+.stub-tag {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  background: #22253a;
+  padding: 2px 8px;
+  border-radius: 20px;
+}
+
+/* ── status row ──────────────────────────────────────────────────────────── */
+.status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.status-row b { color: var(--text); }
+
+/* ── D-pad ───────────────────────────────────────────────────────────────── */
+.dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 52px);
+  grid-template-rows:    repeat(3, 52px);
+  gap: 4px;
+  justify-content: center;
+}
+.dpad-btn {
+  background: #22253a;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.1s;
+  user-select: none;
+}
+.dpad-btn:hover  { background: #2e3250; }
+.dpad-btn:active { background: var(--accent); color: #fff; }
+
+/* grid placement */
+#ugv-fwd   { grid-column: 2; grid-row: 1; }
+#ugv-left  { grid-column: 1; grid-row: 2; }
+#ugv-stop  { grid-column: 2; grid-row: 2; }
+#ugv-right { grid-column: 3; grid-row: 2; }
+#ugv-bwd   { grid-column: 2; grid-row: 3; }
+
+/* ── sliders ─────────────────────────────────────────────────────────────── */
+.slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.slider-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.slider-row label b, .slider-row label span { color: var(--text); }
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+/* ── lift controls ───────────────────────────────────────────────────────── */
+.lift-controls { display: flex; flex-direction: column; gap: 10px; }
+
+.input-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.input-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+  flex: 1;
+  min-width: 120px;
+}
+input[type="number"] {
+  background: #22253a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 14px;
+  width: 100%;
+}
+input[type="number"]:focus { outline: 1px solid var(--accent); }
+
+/* ── button rows ─────────────────────────────────────────────────────────── */
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+button {
+  border: none;
+  border-radius: 7px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+button:hover  { opacity: 0.85; }
+button:active { opacity: 0.7; }
+
+.btn-primary   { background: var(--accent);  color: #fff; }
+.btn-secondary { background: #22253a; color: var(--text); border: 1px solid var(--border); }
+.btn-warn      { background: var(--warn);    color: #111; }
+.btn-preset    { background: #22253a; color: var(--muted); border: 1px solid var(--border); font-size: 12px; padding: 5px 10px; }
+.btn-preset:hover { color: var(--text); border-color: var(--accent); }
+
+/* ── joint / finger grids ────────────────────────────────────────────────── */
+.joint-grid, .finger-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.joint-row, .finger-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.joint-row label, .finger-row label {
+  width: 60px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.joint-row input[type="range"],
+.finger-row input[type="range"] { flex: 1; }
+.joint-row .val, .finger-row .val {
+  width: 42px;
+  text-align: right;
+  color: var(--text);
+}
+
+/* ── lift settings (collapsible) ─────────────────────────────────────────── */
+.lift-settings {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.lift-settings summary {
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  user-select: none;
+  background: #1e2130;
+  list-style: none;
+}
+.lift-settings summary::before {
+  content: "▶ ";
+  font-size: 10px;
+}
+.lift-settings[open] summary::before { content: "▼ "; }
+.lift-settings summary:hover { color: var(--text); }
+
+.settings-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.settings-info {
+  font-size: 12px;
+  color: var(--muted);
+}
+.settings-info b { color: var(--accent2); }
+
+/* ── camera ──────────────────────────────────────────────────────────────── */
+.camera-wrap {
+  position: relative;
+  width: 100%;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+}
+.camera-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.camera-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ── footer ──────────────────────────────────────────────────────────────── */
+footer {
+  text-align: center;
+  padding: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ── auth pages (login / register) ──────────────────────────────────────── */
+body.auth-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+.auth-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 36px 32px;
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.auth-card h1 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+}
+.auth-card h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent);
+  text-align: center;
+  margin-top: -8px;
+}
+.auth-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.auth-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.auth-card input[type="text"],
+.auth-card input[type="password"] {
+  background: #22253a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 14px;
+  width: 100%;
+}
+.auth-card input:focus { outline: 1px solid var(--accent); }
+.btn-full { width: 100%; padding: 10px; font-size: 14px; }
+.auth-alert {
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.auth-alert.error { background: #3d1a1a; color: var(--danger); }
+.auth-alert.warn  { background: #3d2a1a; color: var(--warn); }
+.auth-alert.ok    { background: #1a3d2b; color: var(--accent2); }
+.auth-footer {
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+.auth-footer a { color: var(--accent); text-decoration: none; }
+.auth-footer a:hover { text-decoration: underline; }
+
+/* ── header user info ────────────────────────────────────────────────────── */
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.username {
+  font-size: 13px;
+  color: var(--text);
+}
+.role-badge { font-size: 11px; }
+.role-badge.role-admin    { background: #2a1a3d; color: #c084fc; }
+.role-badge.role-operator { background: #1a2a3d; color: var(--accent); }
+.role-badge.role-viewer   { background: #22253a; color: var(--muted); }
+.btn-icon {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  padding: 5px 8px;
+  font-size: 15px;
+  cursor: pointer;
+  line-height: 1;
+}
+.btn-icon:hover { color: var(--text); border-color: var(--accent); }
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ── modal ───────────────────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 16px;
+}
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 100%;
+  max-width: 560px;
+  max-height: 90vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+.modal-header h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.modal-section {
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.modal-section:last-child { border-bottom: none; }
+.modal-section h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── user management table ───────────────────────────────────────────────── */
+.user-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.user-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  font-weight: 500;
+}
+.user-table td {
+  padding: 8px 8px;
+  border-bottom: 1px solid #1e2130;
+  vertical-align: middle;
+}
+.user-table tr:last-child td { border-bottom: none; }
+.user-actions { display: flex; gap: 6px; }
+.badge.active  { background: #1a3d2b; color: var(--accent2); }
+.badge.pending { background: #3d2a1a; color: var(--warn); }
+.role-select {
+  background: #22253a;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.role-select:focus { outline: 1px solid var(--accent); }
