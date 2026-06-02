@@ -1,12 +1,15 @@
-"""UGV chassis controller — wraps ugv_sdk via subprocess/socket bridge.
+"""UGV chassis controller — wraps ugv_sdk via TCP bridge.
 
-The ugv_sdk is a C++ library. This module communicates with it through a
-thin JSON-over-TCP bridge process (ugv_bridge.py) that must be started
-separately, or via direct python-can if a pure-Python path is available.
+Architecture:
+  CAN bus ↔ ugv_bridge (C++, links ugv_sdk) ↔ TCP :9100 ↔ UGVController (this module)
 
-For now this module provides:
-  - A UGVController class with the same interface the robot.py expects
-  - A stub that logs commands when the bridge is not connected (safe fallback)
+The bridge is a standalone C++ executable (ugv_sdk/sample/ugv_bridge/) that must be
+started before robot_control:
+
+    cd ugv_sdk/build && make ugv_bridge && ./bin/ugv_bridge can0
+
+This module connects to it and exposes a high-level Python interface matching
+what robot.py expects. Falls back to stub mode when the bridge is not reachable.
 """
 
 import json
@@ -15,37 +18,98 @@ import socket
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 log = logging.getLogger(__name__)
 
 # ── data types ────────────────────────────────────────────────────────────────
 
 @dataclass
+class ActuatorHS:
+    rpm: float = 0.0
+    current: float = 0.0
+    pulse_count: int = 0
+
+@dataclass
+class ActuatorLS:
+    driver_voltage: float = 0.0
+    driver_temp: float = 0.0
+    motor_temp: float = 0.0
+    driver_state: int = 0
+
+@dataclass
 class UGVState:
-    linear_velocity: float = 0.0    # m/s, forward positive
-    angular_velocity: float = 0.0   # rad/s, CCW positive
-    battery_voltage: float = 0.0    # V
+    # motion
+    linear_velocity: float = 0.0     # m/s, forward positive
+    angular_velocity: float = 0.0    # rad/s, CCW positive
+    lateral_velocity: float = 0.0    # m/s
+    steering_angle: float = 0.0      # rad
+
+    # system
+    battery_voltage: float = 0.0     # V
+    vehicle_state: int = 0           # 0=normal, 1=estop, 2=exception
+    control_mode: int = 0            # 0=standby, 1=CAN, 2=UART, 3=RC
+    error_code: int = 0
     fault_code: int = 0
+    motion_mode: int = 0             # 0=dual_ackerman, 1=parallel, 2=spinning, 3=park, 4=side_slip
+    mode_changing: int = 0
+
+    # RC
+    rc_connected: bool = False
+    rc_swa: int = 0
+    rc_swb: int = 0
+    rc_swc: int = 0
+    rc_swd: int = 0
+    rc_stick_right_v: int = 0
+    rc_stick_right_h: int = 0
+    rc_stick_left_v: int = 0
+    rc_stick_left_h: int = 0
+
+    # odometry
+    odom_left: float = 0.0
+    odom_right: float = 0.0
+
+    # motor speeds (RPM)
+    motor_speeds: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
+
+    # motor angles (rad)
+    motor_angles: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
+
+    # actuator state (8 motors)
+    actuator_hs: List[ActuatorHS] = field(default_factory=lambda: [ActuatorHS() for _ in range(8)])
+    actuator_ls: List[ActuatorLS] = field(default_factory=lambda: [ActuatorLS() for _ in range(8)])
+
+    # BMS
+    bms_soc: int = 0
+    bms_soh: int = 0
+    bms_voltage: float = 0.0
+    bms_current: float = 0.0
+    bms_temperature: float = 0.0
+    bms_alarm1: int = 0
+    bms_alarm2: int = 0
+    bms_warn1: int = 0
+    bms_warn2: int = 0
+
+    # meta
     connected: bool = False
     timestamp: float = field(default_factory=time.time)
 
 
-# ── controller ────────────────────────────────────────────────────────────────
+# ── controller ───────────────────────────────────────────────────────────────
 
 class UGVController:
     """
     High-level interface for the AgileX UGV chassis.
 
-    Communicates with ugv_bridge (a small C++/Python process that wraps
-    ugv_sdk) over a local TCP socket. Falls back to stub mode when the
-    bridge is not reachable so the rest of the system can still run.
+    Communicates with ugv_bridge (C++ process wrapping ugv_sdk) over a local
+    TCP socket. Falls back to stub mode when the bridge is not reachable so the
+    rest of the system can still run.
     """
 
     BRIDGE_HOST = "127.0.0.1"
     BRIDGE_PORT = 9100
-    RECONNECT_INTERVAL = 3.0    # seconds between reconnect attempts
-    STATE_TIMEOUT = 0.5         # seconds before state is considered stale
+    RECONNECT_INTERVAL = 3.0
+    STATE_TIMEOUT = 0.5
 
     def __init__(self, host: str = BRIDGE_HOST, port: int = BRIDGE_PORT):
         self._host = host
@@ -83,11 +147,7 @@ class UGVController:
     # ── commands ──────────────────────────────────────────────────────────────
 
     def set_velocity(self, linear: float, angular: float) -> None:
-        """
-        Send velocity command.
-        linear:  m/s  (forward positive, typical range ±1.5 m/s)
-        angular: rad/s (CCW positive, typical range ±1.0 rad/s)
-        """
+        """Send velocity command. linear: m/s, angular: rad/s."""
         cmd = {"cmd": "velocity", "linear": round(linear, 4), "angular": round(angular, 4)}
         self._send(cmd)
 
@@ -95,12 +155,12 @@ class UGVController:
         self.set_velocity(0.0, 0.0)
 
     def emergency_stop(self) -> None:
-        cmd = {"cmd": "estop"}
-        self._send(cmd)
+        self._send({"cmd": "estop"})
         log.warning("[UGV] Emergency stop sent")
 
-    def clear_fault(self) -> None:
-        self._send({"cmd": "clear_fault"})
+    def enable(self) -> None:
+        """Re-enable commanded mode (after estop or mode switch)."""
+        self._send({"cmd": "enable"})
 
     # ── state ─────────────────────────────────────────────────────────────────
 
@@ -166,15 +226,61 @@ class UGVController:
         try:
             msg = json.loads(line)
             with self._lock:
-                if "linear_velocity" in msg:
-                    self._state.linear_velocity = msg["linear_velocity"]
-                if "angular_velocity" in msg:
-                    self._state.angular_velocity = msg["angular_velocity"]
-                if "battery_voltage" in msg:
-                    self._state.battery_voltage = msg["battery_voltage"]
-                if "fault_code" in msg:
-                    self._state.fault_code = msg["fault_code"]
-                self._state.timestamp = time.time()
+                s = self._state
+                # motion
+                for key in ("linear_velocity", "angular_velocity",
+                            "lateral_velocity", "steering_angle"):
+                    if key in msg:
+                        setattr(s, key, msg[key])
+                # system
+                for key in ("battery_voltage", "vehicle_state", "control_mode",
+                            "error_code", "fault_code", "motion_mode", "mode_changing"):
+                    if key in msg:
+                        setattr(s, key, msg[key])
+                # RC
+                if "rc_connected" in msg:
+                    s.rc_connected = bool(msg["rc_connected"])
+                for key in ("rc_swa", "rc_swb", "rc_swc", "rc_swd",
+                            "rc_stick_right_v", "rc_stick_right_h",
+                            "rc_stick_left_v", "rc_stick_left_h"):
+                    if key in msg:
+                        setattr(s, key, msg[key])
+                # odometry
+                for key in ("odom_left", "odom_right"):
+                    if key in msg:
+                        setattr(s, key, msg[key])
+                # motor arrays
+                if "motor_speeds" in msg:
+                    s.motor_speeds = [float(v) for v in msg["motor_speeds"]]
+                if "motor_angles" in msg:
+                    s.motor_angles = [float(v) for v in msg["motor_angles"]]
+                # actuator HS
+                if "actuator_hs" in msg:
+                    for i, item in enumerate(msg["actuator_hs"][:8]):
+                        s.actuator_hs[i] = ActuatorHS(
+                            rpm=float(item.get("rpm", 0)),
+                            current=float(item.get("current", 0)),
+                            pulse_count=int(item.get("pulse_count", 0)),
+                        )
+                # actuator LS
+                if "actuator_ls" in msg:
+                    for i, item in enumerate(msg["actuator_ls"][:8]):
+                        s.actuator_ls[i] = ActuatorLS(
+                            driver_voltage=float(item.get("driver_voltage", 0)),
+                            driver_temp=float(item.get("driver_temp", 0)),
+                            motor_temp=float(item.get("motor_temp", 0)),
+                            driver_state=int(item.get("driver_state", 0)),
+                        )
+                # BMS
+                for key in ("bms_soc", "bms_soh", "bms_voltage", "bms_current",
+                            "bms_temperature", "bms_alarm1", "bms_alarm2",
+                            "bms_warn1", "bms_warn2"):
+                    if key in msg:
+                        setattr(s, key, msg[key])
+                # connection flag (as reported by bridge)
+                if "connected" in msg:
+                    s.connected = bool(msg["connected"])
+                s.timestamp = time.time()
         except json.JSONDecodeError:
             log.warning("[UGV] Bad message: %r", line)
 
