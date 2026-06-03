@@ -122,6 +122,37 @@ socket.on("robot_state", (s) => {
   el("ugv-battery").textContent   = fmt(s.ugv.battery_voltage, 1);
   el("ugv-linear").textContent    = fmt(s.ugv.linear_velocity);
   el("ugv-angular").textContent   = fmt(s.ugv.angular_velocity);
+  el("ugv-soc").textContent       = s.ugv.bms_soc != null ? s.ugv.bms_soc : "—";
+
+  // UGV diagnostics
+  const vsEl = el("ugv-vehicle-state");
+  const cmEl = el("ugv-control-mode");
+  if (vsEl) {
+    const vsLabels = {0: "正常", 1: "急停", 2: "异常"};
+    vsEl.textContent = vsLabels[s.ugv.vehicle_state] || s.ugv.vehicle_state;
+    vsEl.style.color = s.ugv.vehicle_state === 0 ? "#4caf50" : s.ugv.vehicle_state === 1 ? "#ff9800" : "#f44336";
+  }
+  if (cmEl) {
+    const cmLabels = {0: "待机", 1: "CAN指令", 2: "UART", 3: "遥控器"};
+    cmEl.textContent = cmLabels[s.ugv.control_mode] || s.ugv.control_mode;
+    cmEl.style.color = s.ugv.control_mode === 1 ? "#4caf50" : s.ugv.control_mode === 0 ? "#f44336" : "#ff9800";
+  }
+
+  // UGV operation log
+  const ugvLogPanel = el("ugv-log-panel");
+  if (ugvLogPanel && s.ugv.logs && s.ugv.logs.length > 0) {
+    const lastTs = ugvLogPanel.dataset.lastTs || "0";
+    const latest = s.ugv.logs[s.ugv.logs.length - 1];
+    if (latest.ts > parseFloat(lastTs)) {
+      ugvLogPanel.dataset.lastTs = latest.ts;
+      ugvLogPanel.innerHTML = s.ugv.logs.map(e => {
+        const t = new Date(e.ts * 1000).toLocaleTimeString();
+        const cls = e.level === "error" ? "#f44336" : e.level === "warn" ? "#ff9800" : "#999";
+        return `<div style="color:${cls};line-height:1.6">${t} [${e.level.toUpperCase()}] ${e.msg}</div>`;
+      }).join("");
+      ugvLogPanel.scrollTop = ugvLogPanel.scrollHeight;
+    }
+  }
 
   // Lift
   el("lift-height").textContent = fmt(s.lift.height_mm, 1);
@@ -228,6 +259,27 @@ document.querySelectorAll(".dpad-btn").forEach((btn) => {
   btn.addEventListener("mouseleave", stop);
   btn.addEventListener("touchend",   stop);
 });
+
+// UGV enable / reset
+const btnUgvEnable = el("btn-ugv-enable");
+const btnUgvReset  = el("btn-ugv-reset");
+if (btnUgvEnable) btnUgvEnable.addEventListener("click", () => socket.emit("ugv_enable"));
+if (btnUgvReset)  btnUgvReset.addEventListener("click",  () => socket.emit("ugv_reset"));
+
+// UGV log panel toggle
+const btnToggleUgvLog = el("btn-toggle-ugv-log");
+if (btnToggleUgvLog) {
+  btnToggleUgvLog.addEventListener("click", () => {
+    const panel = el("ugv-log-panel");
+    if (panel.style.display === "none") {
+      panel.style.display = "block";
+      btnToggleUgvLog.innerHTML = "运行日志 &#9650;";
+    } else {
+      panel.style.display = "none";
+      btnToggleUgvLog.innerHTML = "运行日志 &#9660;";
+    }
+  });
+}
 
 // ── Lift ──────────────────────────────────────────────────────────────────────
 let _lastPresetKey = "";

@@ -41,6 +41,10 @@
         <span>线速度：<b id="ugv-linear">—</b> m/s</span>
         <span>角速度：<b id="ugv-angular">—</b> rad/s</span>
       </div>
+      <div class="btn-row">
+        <button class="btn-primary ctrl" id="btn-ugv-enable">使能 CAN 模式</button>
+        <button class="btn-warn ctrl"    id="btn-ugv-reset">清除故障</button>
+      </div>
       <div class="dpad">
         <button class="dpad-btn ctrl" id="ugv-fwd"   data-l="0.5"  data-a="0.0">&#9650;</button>
         <button class="dpad-btn ctrl" id="ugv-left"  data-l="0.0"  data-a="0.5">&#9664;</button>
@@ -56,6 +60,14 @@
           <input type="range" id="sl-angular" min="0.1" max="1.0" step="0.1" value="0.5" />
         </label>
       </div>
+      <!-- UGV 诊断 + 运行日志 -->
+      <div class="lift-diag" style="margin-top:4px; font-size:12px; color:#999">
+        <span>车辆状态: <b id="ugv-vehicle-state">—</b></span>
+        <span style="margin-left:12px">控制模式: <b id="ugv-control-mode">—</b></span>
+        <span style="margin-left:12px">SOC: <b id="ugv-soc">—</b>%</span>
+        <button id="btn-toggle-ugv-log" class="btn-sm" style="margin-left:12px">运行日志 &#9660;</button>
+      </div>
+      <div id="ugv-log-panel" style="display:none; margin-top:8px; max-height:260px; overflow-y:auto; background:#1a1a1a; border:1px solid #333; border-radius:4px; padding:6px 10px; font-family:monospace; font-size:12px;"></div>
     </section>
 
     <!-- ── Lift ────────────────────────────────────────────────────── -->

@@ -332,6 +332,22 @@ def on_ugv_estop(_data=None):
         robot.emergency_stop()
 
 
+@socketio.on("ugv_enable")
+def on_ugv_enable(_data=None):
+    _touch_activity()
+    if not _require_role("operator"): return
+    if robot and robot.ugv:
+        robot.ugv.enable()
+
+
+@socketio.on("ugv_reset")
+def on_ugv_reset(_data=None):
+    _touch_activity()
+    if not _require_role("operator"): return
+    if robot and robot.ugv:
+        robot.ugv.reset()
+
+
 # Lift
 @socketio.on("lift_move")
 def on_lift_move(data):

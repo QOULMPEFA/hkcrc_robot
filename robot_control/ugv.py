@@ -25,6 +25,12 @@ log = logging.getLogger(__name__)
 # ── data types ────────────────────────────────────────────────────────────────
 
 @dataclass
+class UGVLogEntry:
+    timestamp: float = 0.0
+    level: str = "info"     # "info" | "warn" | "error"
+    message: str = ""
+
+@dataclass
 class ActuatorHS:
     rpm: float = 0.0
     current: float = 0.0
@@ -93,6 +99,7 @@ class UGVState:
     # meta
     connected: bool = False
     timestamp: float = field(default_factory=time.time)
+    logs: list = field(default_factory=list)  # last N UGVLogEntry dicts
 
 
 # ── controller ───────────────────────────────────────────────────────────────
@@ -110,6 +117,7 @@ class UGVController:
     BRIDGE_PORT = 9100
     RECONNECT_INTERVAL = 3.0
     STATE_TIMEOUT = 0.5
+    LOG_CAPACITY = 80
 
     def __init__(self, host: str = BRIDGE_HOST, port: int = BRIDGE_PORT):
         self._host = host
@@ -119,6 +127,9 @@ class UGVController:
         self._state = UGVState()
         self._running = False
         self._rx_thread: Optional[threading.Thread] = None
+        self._logs: list[UGVLogEntry] = []
+        self._last_vehicle_state = 0
+        self._last_control_mode = 0
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -149,24 +160,38 @@ class UGVController:
     def set_velocity(self, linear: float, angular: float) -> None:
         """Send velocity command. linear: m/s, angular: rad/s."""
         cmd = {"cmd": "velocity", "linear": round(linear, 4), "angular": round(angular, 4)}
+        self._add_log("info", f"速度指令: linear={linear:.2f} m/s, angular={angular:.2f} rad/s")
         self._send(cmd)
 
     def stop_motion(self) -> None:
         self.set_velocity(0.0, 0.0)
 
     def emergency_stop(self) -> None:
+        self._add_log("error", "紧急停止")
         self._send({"cmd": "estop"})
         log.warning("[UGV] Emergency stop sent")
 
     def enable(self) -> None:
         """Re-enable commanded mode (after estop or mode switch)."""
+        self._add_log("info", "尝试切换到 CAN 指令模式...")
         self._send({"cmd": "enable"})
+
+    def reset(self) -> None:
+        """Reset robot state (clear faults)."""
+        self._add_log("info", "重置底盘状态 (清除故障)...")
+        self._send({"cmd": "reset"})
 
     # ── state ─────────────────────────────────────────────────────────────────
 
     def get_state(self) -> UGVState:
         with self._lock:
-            return UGVState(**self._state.__dict__)
+            s = UGVState(**self._state.__dict__)
+            s.logs = [{
+                "ts": e.timestamp,
+                "level": e.level,
+                "msg": e.message,
+            } for e in self._logs[-30:]]
+            return s
 
     def is_connected(self) -> bool:
         with self._lock:
@@ -196,12 +221,16 @@ class UGVController:
                     self._sock = sock
                     self._state.connected = True
                 log.info("[UGV] Bridge connected")
+                self._add_log("info", "Bridge 已连接 (127.0.0.1:9100)")
                 self._recv_loop(sock)
             except (OSError, ConnectionRefusedError) as e:
                 log.debug("[UGV] Bridge not available: %s", e)
+                was_connected = self._state.connected
                 with self._lock:
                     self._sock = None
                     self._state.connected = False
+                if was_connected:
+                    self._add_log("warn", "Bridge 连接断开")
             time.sleep(self.RECONNECT_INTERVAL)
 
     def _recv_loop(self, sock: socket.socket) -> None:
@@ -281,6 +310,19 @@ class UGVController:
                 if "connected" in msg:
                     s.connected = bool(msg["connected"])
                 s.timestamp = time.time()
+                # log state transitions
+                vs = s.vehicle_state
+                cm = s.control_mode
+                if vs != self._last_vehicle_state:
+                    labels = {0: "正常", 1: "急停", 2: "异常"}
+                    self._add_log("warn" if vs != 0 else "info",
+                                  f"车辆状态: {labels.get(vs, str(vs))} (code={vs})")
+                    self._last_vehicle_state = vs
+                if cm != self._last_control_mode:
+                    labels = {0: "待机", 1: "CAN指令", 2: "UART", 3: "遥控器"}
+                    self._add_log("warn" if cm == 0 else "info",
+                                  f"控制模式: {labels.get(cm, str(cm))} (code={cm})")
+                    self._last_control_mode = cm
         except json.JSONDecodeError:
             log.warning("[UGV] Bad message: %r", line)
 
@@ -292,3 +334,10 @@ class UGVController:
                 except OSError:
                     pass
                 self._sock = None
+
+    def _add_log(self, level: str, message: str) -> None:
+        entry = UGVLogEntry(timestamp=time.time(), level=level, message=message)
+        with self._lock:
+            self._logs.append(entry)
+            if len(self._logs) > self.LOG_CAPACITY:
+                self._logs = self._logs[-self.LOG_CAPACITY:]

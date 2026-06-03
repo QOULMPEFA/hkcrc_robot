@@ -181,6 +181,7 @@ int main(int argc, char *argv[]) {
 
   try {
     robot->Connect(can_dev);
+    robot->ResetRobotState();
     robot->EnableCommandedMode();
   } catch (const std::exception &e) {
     std::cerr << "[bridge] CAN init failed: " << e.what() << std::endl;
@@ -268,8 +269,12 @@ int main(int argc, char *argv[]) {
           robot->SetMotionCommand(0.0, 0.0);
           std::cout << "[bridge] ESTOP" << std::endl;
         } else if (cmd == "enable") {
+          robot->ResetRobotState();
           robot->EnableCommandedMode();
-          std::cout << "[bridge] Commanded mode re-enabled" << std::endl;
+          std::cout << "[bridge] Fault cleared, commanded mode re-enabled" << std::endl;
+        } else if (cmd == "reset") {
+          robot->ResetRobotState();
+          std::cout << "[bridge] Robot state reset" << std::endl;
         } else {
           std::cerr << "[bridge] Unknown cmd: " << cmd << std::endl;
         }
