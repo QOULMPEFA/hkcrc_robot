@@ -261,8 +261,13 @@ int main(int argc, char *argv[]) {
         if (cmd == "velocity") {
           double linear  = extract_num(cmd_json, "linear", 0.0);
           double angular = extract_num(cmd_json, "angular", 0.0);
-          robot->SetMotionMode(RangerInterface::MotionMode::kDualAckerman);
-          robot->SetMotionCommand(linear, angular);
+          if (linear < 0.01 && linear > -0.01 && (angular > 0.01 || angular < -0.01)) {
+            robot->SetMotionMode(RangerInterface::MotionMode::kSpinning);
+            robot->SetMotionCommand(0.0, 0.0, angular);
+          } else {
+            robot->SetMotionMode(RangerInterface::MotionMode::kDualAckerman);
+            robot->SetMotionCommand(linear, angular);
+          }
         } else if (cmd == "estop") {
           robot->SetMotionCommand(0.0, 0.0);
           std::cout << "[bridge] ESTOP" << std::endl;
