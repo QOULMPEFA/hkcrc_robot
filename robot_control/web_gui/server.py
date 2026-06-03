@@ -86,8 +86,15 @@ class _CameraBroadcaster:
             "-f", "v4l2", "-input_format", "mjpeg",
             "-framerate", "30", "-video_size", "1280x720",
             "-i", CAMERA_DEVICE,
-            "-f", "image2pipe", "-vf", "fps=15",
-            "-vcodec", "mjpeg", "-q:v", "5", "pipe:1",
+            # Output 1: MJPEG pipe → /stream (browser <img>)
+            "-vf", "fps=15",
+            "-vcodec", "mjpeg", "-q:v", "5",
+            "-f", "image2pipe", "pipe:1",
+            # Output 2: H.264 RTMP → SRS → WebRTC
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+            "-pix_fmt", "yuv420p",
+            "-an",
+            "-f", "flv", "rtmp://localhost/live/cam",
         ]
         while self._running:
             proc = None

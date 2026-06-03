@@ -40,6 +40,19 @@ function _switchToVideo() {
       }
     };
 
+    // Register ontrack BEFORE setRemoteDescription — the event fires during SRD.
+    let _fallbackTimer = setTimeout(() => {
+      camStatus.textContent = "MJPEG";
+      camStatus.className = "badge";
+    }, 8000);
+    pc.ontrack = (evt) => {
+      clearTimeout(_fallbackTimer);
+      cameraVideo.srcObject = evt.streams[0];
+      _switchToVideo();
+      camStatus.textContent = "WebRTC ✓";
+      camStatus.className = "badge connected";
+    };
+
     pc.addTransceiver("video", { direction: "recvonly" });
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -67,19 +80,6 @@ function _switchToVideo() {
     await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
     camStatus.textContent = "WebRTC 协商中";
     camStatus.className = "badge";
-    // Keep MJPEG visible until ontrack actually fires.
-    // If no video track within 8 s, assume the stream is empty and stay on MJPEG.
-    let _fallbackTimer = setTimeout(() => {
-      camStatus.textContent = "MJPEG";
-      camStatus.className = "badge";
-    }, 8000);
-    pc.ontrack = (evt) => {
-      clearTimeout(_fallbackTimer);
-      cameraVideo.srcObject = evt.streams[0];
-      _switchToVideo();
-      camStatus.textContent = "WebRTC ✓";
-      camStatus.className = "badge connected";
-    };
   } catch (e) {
     console.log("WebRTC camera fallback — " + e.message);
     camStatus.textContent = "MJPEG";

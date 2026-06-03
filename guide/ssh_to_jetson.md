@@ -23,9 +23,19 @@ Host jetson
 
 别名: `jetson` 或 `HKCRC_Jetson`（两个配置指向同一主机）。
 
-## Ports
-- TCP: frp-fit.com:35230 -> local:6080  (Web GUI — robot_control/web_gui/server.py)
-- TCP: frp-fit.com:35240 -> local:5000  (未使用 / 备用)
+## FRP Tunnels (Sakura FRP / NATFRP)
+
+| Tunnel Name | Type | External (frp-fit.com) | Local Target | Purpose |
+|-------------|------|------------------------|--------------|---------|
+| HKCRC_AGX | TCP | 35200 | 127.0.0.1:22 | SSH |
+| HKCRC_JETSON_TCP | TCP | 35230 | 127.0.0.1:6080 | Web GUI |
+| TPC_35900 | TCP | 35900 | SRS API (1985) | WebRTC signaling |
+| 8000 | TCP | 35600 | 127.0.0.1:8000 | SRS RTC (TCP only) |
+| UDP_35500 | UDP | 35500 | — | NATFRP 共享 UDP 端口（P2P 穿透 / UDP 中继） |
+| 3000 | TCP | 35500 | 127.0.0.1:3000 | unknown |
+| TCP_35700 | TCP | 35700 | — | unknown |
+
+> NATFRP 仅对 TCP 隧道提供完整支持。WebRTC 媒体流需要 UDP，因此摄像头只能走 MJPEG over TCP。
 
 ## Services
 - `camera_server.service` (systemd, Restart=always): `/home/yu/camera_server.py` 监听 **6001**，提供 MJPEG 摄像头流
