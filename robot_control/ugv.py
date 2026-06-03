@@ -130,6 +130,13 @@ class UGVController:
         self._logs: list[UGVLogEntry] = []
         self._last_vehicle_state = 0
         self._last_control_mode = 0
+        self._last_error_code = 0
+        self._error_labels = {
+            0x0001: "电池故障", 0x0002: "电池警告", 0x0004: "RC信号丢失",
+            0x0008: "电机1通信", 0x0010: "电机2通信", 0x0020: "电机3通信",
+            0x0040: "电机4通信", 0x0080: "转向编码器", 0x0100: "电机驱动",
+            0x0200: "HL通信",
+        }
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -323,6 +330,16 @@ class UGVController:
                     self._add_log("warn" if cm == 0 else "info",
                                   f"控制模式: {labels.get(cm, str(cm))} (code={cm})")
                     self._last_control_mode = cm
+                ec = s.error_code
+                if ec != self._last_error_code:
+                    if ec == 0:
+                        self._add_log("info", "故障已清除 (error_code=0)")
+                    else:
+                        bits = [lbl for mask, lbl in self._error_labels.items() if ec & mask]
+                        if not bits:
+                            bits = [f"未知(0x{ec:04X})"]
+                        self._add_log("error", f"故障码: 0x{ec:04X} → {', '.join(bits)}")
+                    self._last_error_code = ec
         except json.JSONDecodeError:
             log.warning("[UGV] Bad message: %r", line)
 
