@@ -123,7 +123,7 @@ class UGVController:
         self._host = host
         self._port = port
         self._sock: Optional[socket.socket] = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._state = UGVState()
         self._running = False
         self._rx_thread: Optional[threading.Thread] = None
