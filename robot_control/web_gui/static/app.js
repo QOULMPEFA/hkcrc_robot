@@ -247,14 +247,22 @@ slLinear.addEventListener("input",  () => { lblLinear.textContent  = slLinear.va
 slAngular.addEventListener("input", () => { lblAngular.textContent = slAngular.value; });
 
 document.querySelectorAll(".dpad-btn").forEach((btn) => {
-  const send = () => {
-    const l = parseFloat(btn.dataset.l) * parseFloat(slLinear.value);
-    const a = parseFloat(btn.dataset.a) * parseFloat(slAngular.value);
-    socket.emit("ugv_velocity", { linear: l, angular: a });
+  let interval = null;
+  const start = () => {
+    const send = () => {
+      const l = parseFloat(btn.dataset.l) * parseFloat(slLinear.value);
+      const a = parseFloat(btn.dataset.a) * parseFloat(slAngular.value);
+      socket.emit("ugv_velocity", { linear: l, angular: a });
+    };
+    send();  // immediate first frame
+    interval = setInterval(send, 100);  // 10 Hz while held
   };
-  btn.addEventListener("mousedown",  send);
-  btn.addEventListener("touchstart", send, { passive: true });
-  const stop = () => socket.emit("ugv_stop");
+  const stop = () => {
+    if (interval) { clearInterval(interval); interval = null; }
+    socket.emit("ugv_stop");
+  };
+  btn.addEventListener("mousedown",  start);
+  btn.addEventListener("touchstart", start, { passive: true });
   btn.addEventListener("mouseup",    stop);
   btn.addEventListener("mouseleave", stop);
   btn.addEventListener("touchend",   stop);
