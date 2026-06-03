@@ -274,6 +274,21 @@ const btnUgvReset  = el("btn-ugv-reset");
 if (btnUgvEnable) btnUgvEnable.addEventListener("click", () => socket.emit("ugv_enable"));
 if (btnUgvReset)  btnUgvReset.addEventListener("click",  () => socket.emit("ugv_reset"));
 
+// Restart CAN (admin only on server side)
+const btnRestartCan = el("btn-restart-can");
+if (btnRestartCan) {
+  btnRestartCan.addEventListener("click", () => {
+    btnRestartCan.disabled = true;
+    btnRestartCan.textContent = "重启中...";
+    socket.emit("restart_can");
+  });
+}
+socket.on("restart_can_result", (r) => {
+  const btn = el("btn-restart-can");
+  if (btn) { btn.disabled = false; btn.textContent = r.ok ? "CAN 已重启" : "重启 CAN"; }
+  if (!r.ok) alert(r.msg || "重启失败");
+});
+
 // UGV log panel toggle
 const btnToggleUgvLog = el("btn-toggle-ugv-log");
 if (btnToggleUgvLog) {

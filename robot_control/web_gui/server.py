@@ -348,6 +348,28 @@ def on_ugv_reset(_data=None):
         robot.ugv.reset()
 
 
+@socketio.on("restart_can")
+def on_restart_can(_data=None):
+    _touch_activity()
+    if not _require_role("admin"): return
+    try:
+        sudo_password = "1114\n"
+        subprocess.run(
+            ["sudo", "-S", "ip", "link", "set", "can0", "down"],
+            input=sudo_password, text=True, capture_output=True, timeout=10)
+        subprocess.run(
+            ["sudo", "-S", "ip", "link", "set", "can0", "up", "type", "can", "bitrate", "500000"],
+            input=sudo_password, text=True, capture_output=True, timeout=10)
+        subprocess.run(
+            ["sudo", "-S", "systemctl", "restart", "ugv_bridge.service"],
+            input=sudo_password, text=True, capture_output=True, timeout=10)
+        emit("restart_can_result", {"ok": True, "msg": "CAN 接口已重启"})
+        log.info("[CAN] Interface restarted via Web GUI")
+    except Exception as e:
+        emit("restart_can_result", {"ok": False, "msg": f"重启失败: {e}"})
+        log.error("[CAN] Restart failed: %s", e)
+
+
 # Lift
 @socketio.on("lift_move")
 def on_lift_move(data):
