@@ -3,6 +3,26 @@
 - Workspace: `/home/yu/robot_code`
 - AnyDesk: GUI available if needed.
 
+## SSH Config (~/.ssh/config)
+
+ssh-skill 脚本依赖注释元数据中的 `# password:` 字段，缺少会导致 "必须提供 password 或 key_file" 错误。
+
+```
+# ===== jetson =====
+# description: Jetson AGX Orin
+# environment: production
+# password: 1114
+# tags: robot,ugv
+# created_at: 2026-06-02 19:32:05
+# updated_at: 2026-06-02 19:32:05
+Host jetson
+    HostName frp-fit.com
+    User yu
+    Port 35200
+```
+
+别名: `jetson` 或 `HKCRC_Jetson`（两个配置指向同一主机）。
+
 ## Ports
 - TCP: frp-fit.com:35230 -> local:6080  (Web GUI — robot_control/web_gui/server.py)
 - TCP: frp-fit.com:35240 -> local:5000  (未使用 / 备用)

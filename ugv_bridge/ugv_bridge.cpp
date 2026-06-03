@@ -181,13 +181,11 @@ int main(int argc, char *argv[]) {
 
   try {
     robot->Connect(can_dev);
-    robot->ResetRobotState();
-    robot->EnableCommandedMode();
   } catch (const std::exception &e) {
     std::cerr << "[bridge] CAN init failed: " << e.what() << std::endl;
     return 1;
   }
-  std::cout << "[bridge] CAN connected, mode=CMD" << std::endl;
+  std::cout << "[bridge] CAN connected (manual enable required)" << std::endl;
 
   // ── init TCP server ───────────────────────────────────────────────────────
   int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
