@@ -1,3 +1,1 @@
-1. 同步PC和Jetson的代码
-2. 参考git/info.md进行备份
-3. 在log文件夹下新建markdown格式的log记录，名称包含日期时间
+在 log/cclog 目录下新建 Markdown 更新日志。文件名格式：YYYYMMDDHHMMSS.md
