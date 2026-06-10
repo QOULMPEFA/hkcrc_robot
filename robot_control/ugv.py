@@ -1,15 +1,11 @@
 """UGV chassis controller — wraps ugv_sdk via TCP bridge.
 
 Architecture:
-  CAN bus ↔ ugv_bridge (C++, links ugv_sdk) ↔ TCP :9100 ↔ UGVController (this module)
+  CAN bus <-> ugv_bridge (C++, links ugv_sdk) <-> TCP :9100 <-> UGVController
 
-The bridge is a standalone C++ executable (ugv_sdk/sample/ugv_bridge/) that must be
-started before robot_control:
-
-    cd ugv_sdk/build && make ugv_bridge && ./bin/ugv_bridge can0
-
-This module connects to it and exposes a high-level Python interface matching
-what robot.py expects. Falls back to stub mode when the bridge is not reachable.
+The bridge is a standalone C++ executable that must be started before robot_control.
+This module connects to it and exposes a high-level Python interface.
+Falls back to stub mode when the bridge is not reachable.
 """
 
 import json
@@ -18,7 +14,9 @@ import socket
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+
+from robot_control.module_base import RobotModule
 
 log = logging.getLogger(__name__)
 
@@ -27,7 +25,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class UGVLogEntry:
     timestamp: float = 0.0
-    level: str = "info"     # "info" | "warn" | "error"
+    level: str = "info"
     message: str = ""
 
 @dataclass
@@ -45,22 +43,17 @@ class ActuatorLS:
 
 @dataclass
 class UGVState:
-    # motion
-    linear_velocity: float = 0.0     # m/s, forward positive
-    angular_velocity: float = 0.0    # rad/s, CCW positive
-    lateral_velocity: float = 0.0    # m/s
-    steering_angle: float = 0.0      # rad
-
-    # system
-    battery_voltage: float = 0.0     # V
-    vehicle_state: int = 0           # 0=normal, 1=estop, 2=exception
-    control_mode: int = 0            # 0=standby, 1=CAN, 2=UART, 3=RC
+    linear_velocity: float = 0.0
+    angular_velocity: float = 0.0
+    lateral_velocity: float = 0.0
+    steering_angle: float = 0.0
+    battery_voltage: float = 0.0
+    vehicle_state: int = 0
+    control_mode: int = 0
     error_code: int = 0
     fault_code: int = 0
-    motion_mode: int = 0             # 0=dual_ackerman, 1=parallel, 2=spinning, 3=park, 4=side_slip
+    motion_mode: int = 0
     mode_changing: int = 0
-
-    # RC
     rc_connected: bool = False
     rc_swa: int = 0
     rc_swb: int = 0
@@ -70,22 +63,12 @@ class UGVState:
     rc_stick_right_h: int = 0
     rc_stick_left_v: int = 0
     rc_stick_left_h: int = 0
-
-    # odometry
     odom_left: float = 0.0
     odom_right: float = 0.0
-
-    # motor speeds (RPM)
-    motor_speeds: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
-
-    # motor angles (rad)
-    motor_angles: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
-
-    # actuator state (8 motors)
+    motor_speeds: List[float] = field(default_factory=lambda: [0.0] * 4)
+    motor_angles: List[float] = field(default_factory=lambda: [0.0] * 4)
     actuator_hs: List[ActuatorHS] = field(default_factory=lambda: [ActuatorHS() for _ in range(8)])
     actuator_ls: List[ActuatorLS] = field(default_factory=lambda: [ActuatorLS() for _ in range(8)])
-
-    # BMS
     bms_soc: int = 0
     bms_soh: int = 0
     bms_voltage: float = 0.0
@@ -95,33 +78,30 @@ class UGVState:
     bms_alarm2: int = 0
     bms_warn1: int = 0
     bms_warn2: int = 0
-
-    # meta
     connected: bool = False
     timestamp: float = field(default_factory=time.time)
-    logs: list = field(default_factory=list)  # last N UGVLogEntry dicts
+    logs: list = field(default_factory=list)
 
 
 # ── controller ───────────────────────────────────────────────────────────────
 
-class UGVController:
-    """
-    High-level interface for the AgileX UGV chassis.
+class UGVController(RobotModule):
+    """High-level interface for the AgileX UGV chassis via TCP bridge."""
 
-    Communicates with ugv_bridge (C++ process wrapping ugv_sdk) over a local
-    TCP socket. Falls back to stub mode when the bridge is not reachable so the
-    rest of the system can still run.
-    """
-
-    BRIDGE_HOST = "127.0.0.1"
-    BRIDGE_PORT = 9100
     RECONNECT_INTERVAL = 3.0
-    STATE_TIMEOUT = 0.5
     LOG_CAPACITY = 80
 
-    def __init__(self, host: str = BRIDGE_HOST, port: int = BRIDGE_PORT):
-        self._host = host
-        self._port = port
+    _error_labels = {
+        0x0001: "电池故障", 0x0002: "电池警告", 0x0004: "RC信号丢失",
+        0x0008: "电机1通信", 0x0010: "电机2通信", 0x0020: "电机3通信",
+        0x0040: "电机4通信", 0x0080: "转向编码器", 0x0100: "电机驱动",
+        0x0200: "HL通信",
+    }
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        cfg = config or {}
+        self._host = cfg.get("host", "127.0.0.1")
+        self._port = int(cfg.get("port", 9100))
         self._sock: Optional[socket.socket] = None
         self._lock = threading.RLock()
         self._state = UGVState()
@@ -131,41 +111,65 @@ class UGVController:
         self._last_vehicle_state = 0
         self._last_control_mode = 0
         self._last_error_code = 0
-        self._error_labels = {
-            0x0001: "电池故障", 0x0002: "电池警告", 0x0004: "RC信号丢失",
-            0x0008: "电机1通信", 0x0010: "电机2通信", 0x0020: "电机3通信",
-            0x0040: "电机4通信", 0x0080: "转向编码器", 0x0100: "电机驱动",
-            0x0200: "HL通信",
+
+    # ── RobotModule metadata ───────────────────────────────────────────────
+
+    @property
+    def name(self) -> str:
+        return "ugv"
+
+    @property
+    def display_name(self) -> str:
+        return "UGV 底盘"
+
+    def get_state_schema(self) -> Dict[str, Any]:
+        return {
+            "linear_velocity": 0.0, "angular_velocity": 0.0,
+            "lateral_velocity": 0.0, "steering_angle": 0.0,
+            "battery_voltage": 0.0, "vehicle_state": 0, "control_mode": 0,
+            "error_code": 0, "fault_code": 0, "motion_mode": 0, "mode_changing": 0,
+            "rc_connected": False,
+            "rc_swa": 0, "rc_swb": 0, "rc_swc": 0, "rc_swd": 0,
+            "rc_stick_right_v": 0, "rc_stick_right_h": 0,
+            "rc_stick_left_v": 0, "rc_stick_left_h": 0,
+            "odom_left": 0.0, "odom_right": 0.0,
+            "motor_speeds": [0.0] * 4, "motor_angles": [0.0] * 4,
+            "actuator_hs": [{"rpm": 0.0, "current": 0.0, "pulse_count": 0}] * 8,
+            "actuator_ls": [{"driver_voltage": 0.0, "driver_temp": 0.0,
+                             "motor_temp": 0.0, "driver_state": 0}] * 8,
+            "bms_soc": 0, "bms_soh": 0, "bms_voltage": 0.0, "bms_current": 0.0,
+            "bms_temperature": 0.0, "bms_alarm1": 0, "bms_alarm2": 0,
+            "bms_warn1": 0, "bms_warn2": 0,
+            "connected": False, "timestamp": 0.0, "logs": [],
         }
 
-    # ── lifecycle ─────────────────────────────────────────────────────────────
+    def get_socketio_handlers(self) -> Dict[str, callable]:
+        return {
+            "ugv_velocity": self._on_velocity,
+            "ugv_stop": self._on_stop,
+            "ugv_estop": self._on_estop,
+            "ugv_enable": self._on_enable,
+            "ugv_reset": self._on_reset,
+        }
 
-    def start(self) -> "UGVController":
+    # ── lifecycle ──────────────────────────────────────────────────────────
+
+    def start(self) -> None:
         self._running = True
         self._rx_thread = threading.Thread(
             target=self._connection_loop, daemon=True, name="ugv-rx"
         )
         self._rx_thread.start()
         log.info("[UGV] Controller started (bridge %s:%d)", self._host, self._port)
-        return self
 
     def stop(self) -> None:
         self._running = False
-        self.set_velocity(0.0, 0.0)
-        time.sleep(0.1)
         self._close_socket()
         log.info("[UGV] Controller stopped")
 
-    def __enter__(self):
-        return self.start()
-
-    def __exit__(self, *_):
-        self.stop()
-
-    # ── commands ──────────────────────────────────────────────────────────────
+    # ── commands ───────────────────────────────────────────────────────────
 
     def set_velocity(self, linear: float, angular: float) -> None:
-        """Send velocity command. linear: m/s, angular: rad/s."""
         cmd = {"cmd": "velocity", "linear": round(linear, 4), "angular": round(angular, 4)}
         self._add_log("info", f"速度指令: linear={linear:.2f} m/s, angular={angular:.2f} rad/s")
         self._send(cmd)
@@ -179,38 +183,81 @@ class UGVController:
         log.warning("[UGV] Emergency stop sent")
 
     def enable(self) -> None:
-        """Re-enable commanded mode (after estop or mode switch)."""
         self._add_log("info", "尝试切换到 CAN 指令模式...")
         self._send({"cmd": "enable"})
 
     def reset(self) -> None:
-        """Reset robot state (clear faults)."""
         self._add_log("info", "重置底盘状态 (清除故障)...")
         self._send({"cmd": "reset"})
 
-    # ── state ─────────────────────────────────────────────────────────────────
+    # ── state ──────────────────────────────────────────────────────────────
 
-    def get_state(self) -> UGVState:
+    def get_state(self) -> Dict[str, Any]:
         with self._lock:
-            s = UGVState(**self._state.__dict__)
-            s.logs = [{
-                "ts": e.timestamp,
-                "level": e.level,
-                "msg": e.message,
-            } for e in self._logs[-30:]]
-            return s
+            s = self._state
+            return {
+                "linear_velocity": s.linear_velocity,
+                "angular_velocity": s.angular_velocity,
+                "lateral_velocity": s.lateral_velocity,
+                "steering_angle": s.steering_angle,
+                "battery_voltage": s.battery_voltage,
+                "vehicle_state": s.vehicle_state,
+                "control_mode": s.control_mode,
+                "error_code": s.error_code,
+                "fault_code": s.fault_code,
+                "motion_mode": s.motion_mode,
+                "mode_changing": s.mode_changing,
+                "rc_connected": s.rc_connected,
+                "rc_swa": s.rc_swa, "rc_swb": s.rc_swb,
+                "rc_swc": s.rc_swd, "rc_swd": s.rc_swd,
+                "rc_stick_right_v": s.rc_stick_right_v,
+                "rc_stick_right_h": s.rc_stick_right_h,
+                "rc_stick_left_v": s.rc_stick_left_v,
+                "rc_stick_left_h": s.rc_stick_left_h,
+                "odom_left": s.odom_left, "odom_right": s.odom_right,
+                "motor_speeds": list(s.motor_speeds),
+                "motor_angles": list(s.motor_angles),
+                "actuator_hs": [{"rpm": h.rpm, "current": h.current,
+                                 "pulse_count": h.pulse_count} for h in s.actuator_hs],
+                "actuator_ls": [{"driver_voltage": l.driver_voltage, "driver_temp": l.driver_temp,
+                                 "motor_temp": l.motor_temp, "driver_state": l.driver_state}
+                                for l in s.actuator_ls],
+                "bms_soc": s.bms_soc, "bms_soh": s.bms_soh,
+                "bms_voltage": s.bms_voltage, "bms_current": s.bms_current,
+                "bms_temperature": s.bms_temperature,
+                "bms_alarm1": s.bms_alarm1, "bms_alarm2": s.bms_alarm2,
+                "bms_warn1": s.bms_warn1, "bms_warn2": s.bms_warn2,
+                "connected": s.connected, "timestamp": s.timestamp,
+                "logs": [{"ts": e.timestamp, "level": e.level, "msg": e.message}
+                         for e in self._logs[-30:]],
+            }
 
-    def is_connected(self) -> bool:
-        with self._lock:
-            return self._state.connected
+    # ── SocketIO handlers (called by server.py) ────────────────────────────
 
-    # ── internal ──────────────────────────────────────────────────────────────
+    def _on_velocity(self, data: dict, emit=None) -> None:
+        self.set_velocity(
+            float(data.get("linear", 0.0)),
+            float(data.get("angular", 0.0)),
+        )
+
+    def _on_stop(self, _data: dict = None, emit=None) -> None:
+        self.stop_motion()
+
+    def _on_estop(self, _data: dict = None, emit=None) -> None:
+        self.emergency_stop()
+
+    def _on_enable(self, _data: dict = None, emit=None) -> None:
+        self.enable()
+
+    def _on_reset(self, _data: dict = None, emit=None) -> None:
+        self.reset()
+
+    # ── internal ───────────────────────────────────────────────────────────
 
     def _send(self, payload: dict) -> None:
         data = (json.dumps(payload) + "\n").encode()
         with self._lock:
             if self._sock is None:
-                log.debug("[UGV] stub cmd: %s", payload)
                 return
             try:
                 self._sock.sendall(data)
@@ -263,34 +310,28 @@ class UGVController:
             msg = json.loads(line)
             with self._lock:
                 s = self._state
-                # motion
                 for key in ("linear_velocity", "angular_velocity",
-                            "lateral_velocity", "steering_angle"):
+                           "lateral_velocity", "steering_angle"):
                     if key in msg:
                         setattr(s, key, msg[key])
-                # system
                 for key in ("battery_voltage", "vehicle_state", "control_mode",
-                            "error_code", "fault_code", "motion_mode", "mode_changing"):
+                           "error_code", "fault_code", "motion_mode", "mode_changing"):
                     if key in msg:
                         setattr(s, key, msg[key])
-                # RC
                 if "rc_connected" in msg:
                     s.rc_connected = bool(msg["rc_connected"])
                 for key in ("rc_swa", "rc_swb", "rc_swc", "rc_swd",
-                            "rc_stick_right_v", "rc_stick_right_h",
-                            "rc_stick_left_v", "rc_stick_left_h"):
+                           "rc_stick_right_v", "rc_stick_right_h",
+                           "rc_stick_left_v", "rc_stick_left_h"):
                     if key in msg:
                         setattr(s, key, msg[key])
-                # odometry
                 for key in ("odom_left", "odom_right"):
                     if key in msg:
                         setattr(s, key, msg[key])
-                # motor arrays
                 if "motor_speeds" in msg:
                     s.motor_speeds = [float(v) for v in msg["motor_speeds"]]
                 if "motor_angles" in msg:
                     s.motor_angles = [float(v) for v in msg["motor_angles"]]
-                # actuator HS
                 if "actuator_hs" in msg:
                     for i, item in enumerate(msg["actuator_hs"][:8]):
                         s.actuator_hs[i] = ActuatorHS(
@@ -298,7 +339,6 @@ class UGVController:
                             current=float(item.get("current", 0)),
                             pulse_count=int(item.get("pulse_count", 0)),
                         )
-                # actuator LS
                 if "actuator_ls" in msg:
                     for i, item in enumerate(msg["actuator_ls"][:8]):
                         s.actuator_ls[i] = ActuatorLS(
@@ -307,41 +347,40 @@ class UGVController:
                             motor_temp=float(item.get("motor_temp", 0)),
                             driver_state=int(item.get("driver_state", 0)),
                         )
-                # BMS
                 for key in ("bms_soc", "bms_soh", "bms_voltage", "bms_current",
-                            "bms_temperature", "bms_alarm1", "bms_alarm2",
-                            "bms_warn1", "bms_warn2"):
+                           "bms_temperature", "bms_alarm1", "bms_alarm2",
+                           "bms_warn1", "bms_warn2"):
                     if key in msg:
                         setattr(s, key, msg[key])
-                # connection flag (as reported by bridge)
                 if "connected" in msg:
                     s.connected = bool(msg["connected"])
                 s.timestamp = time.time()
-                # log state transitions
-                vs = s.vehicle_state
-                cm = s.control_mode
-                if vs != self._last_vehicle_state:
-                    labels = {0: "正常", 1: "急停", 2: "异常"}
-                    self._add_log("warn" if vs != 0 else "info",
-                                  f"车辆状态: {labels.get(vs, str(vs))} (code={vs})")
-                    self._last_vehicle_state = vs
-                if cm != self._last_control_mode:
-                    labels = {0: "待机", 1: "CAN指令", 2: "UART", 3: "遥控器"}
-                    self._add_log("warn" if cm == 0 else "info",
-                                  f"控制模式: {labels.get(cm, str(cm))} (code={cm})")
-                    self._last_control_mode = cm
-                ec = s.error_code
-                if ec != self._last_error_code:
-                    if ec == 0:
-                        self._add_log("info", "故障已清除 (error_code=0)")
-                    else:
-                        bits = [lbl for mask, lbl in self._error_labels.items() if ec & mask]
-                        if not bits:
-                            bits = [f"未知(0x{ec:04X})"]
-                        self._add_log("error", f"故障码: 0x{ec:04X} → {', '.join(bits)}")
-                    self._last_error_code = ec
+                self._log_state_transitions()
         except json.JSONDecodeError:
             log.warning("[UGV] Bad message: %r", line)
+
+    def _log_state_transitions(self) -> None:
+        s = self._state
+        vs, cm, ec = s.vehicle_state, s.control_mode, s.error_code
+        if vs != self._last_vehicle_state:
+            labels = {0: "正常", 1: "急停", 2: "异常"}
+            self._add_log("warn" if vs != 0 else "info",
+                         f"车辆状态: {labels.get(vs, str(vs))} (code={vs})")
+            self._last_vehicle_state = vs
+        if cm != self._last_control_mode:
+            labels = {0: "待机", 1: "CAN指令", 2: "UART", 3: "遥控器"}
+            self._add_log("warn" if cm == 0 else "info",
+                         f"控制模式: {labels.get(cm, str(cm))} (code={cm})")
+            self._last_control_mode = cm
+        if ec != self._last_error_code:
+            if ec == 0:
+                self._add_log("info", "故障已清除 (error_code=0)")
+            else:
+                bits = [lbl for mask, lbl in self._error_labels.items() if ec & mask]
+                if not bits:
+                    bits = [f"未知(0x{ec:04X})"]
+                self._add_log("error", f"故障码: 0x{ec:04X} -> {', '.join(bits)}")
+            self._last_error_code = ec
 
     def _close_socket(self) -> None:
         with self._lock:

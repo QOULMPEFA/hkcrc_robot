@@ -158,4 +158,4 @@ class SDOCommand:
 DEFAULT_NODE_ID    = 1
 DEFAULT_BITRATE    = 500_000    # 500 kbps
 DEFAULT_PULSES_PER_REV = 1000   # AIMotor factory default
-SDO_TIMEOUT        = 1.0        # seconds
+SDO_TIMEOUT        = 3.0        # seconds (increased for shared CAN bus with UGV traffic)

@@ -35,7 +35,7 @@ class CANopenNode:
         channel: str = "can0",
         bitrate: int = DEFAULT_BITRATE,
         node_id: int = DEFAULT_NODE_ID,
-        sdo_timeout: float = 1.0,
+        sdo_timeout: float = 3.0,
         bus: can.BusABC | None = None,
         shared_bus: "SharedCANBus | None" = None,
     ):

@@ -162,40 +162,61 @@ class SDOClient:
         log.debug("SDO TX → 0x%03X  %s", self._tx_cob, data.hex())
 
     def _wait_response(self, index: int, sub: int, is_write: bool) -> bytes:
-        if not self._response_event.wait(self._timeout):
-            raise SDOError(
-                f"SDO timeout waiting for 0x{index:04X}:{sub:02X}"
-            )
-        msg = self._response_msg
-        cmd = msg.data[0]
-
-        if cmd == SDOCommand.ABORT:
-            abort_code = struct.unpack_from("<I", msg.data, 4)[0]
-            raise SDOAbortError(abort_code, index, sub)
-
-        if is_write:
-            if cmd != SDOCommand.DOWNLOAD_RESP:
+        deadline = time.monotonic() + self._timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 raise SDOError(
-                    f"Unexpected SDO response 0x{cmd:02X} for write to "
+                    f"SDO timeout waiting for 0x{index:04X}:{sub:02X}"
+                )
+            if not self._response_event.wait(remaining):
+                raise SDOError(
+                    f"SDO timeout waiting for 0x{index:04X}:{sub:02X}"
+                )
+            msg = self._response_msg
+            cmd = msg.data[0]
+
+            # Validate this response is for our request (avoid stale frames).
+            resp_index = struct.unpack_from("<H", msg.data, 1)[0]
+            resp_sub = msg.data[3]
+            if resp_index != index or resp_sub != sub:
+                # Stale/delayed response for a different request — ignore and retry.
+                log.debug(
+                    "SDO ignoring stale frame idx=0x%04X:%02X "
+                    "(expected 0x%04X:%02X)",
+                    resp_index, resp_sub, index, sub,
+                )
+                self._response_event.clear()
+                self._response_msg = None
+                continue
+
+            if cmd == SDOCommand.ABORT:
+                abort_code = struct.unpack_from("<I", msg.data, 4)[0]
+                raise SDOAbortError(abort_code, index, sub)
+
+            if is_write:
+                if cmd != SDOCommand.DOWNLOAD_RESP:
+                    raise SDOError(
+                        f"Unexpected SDO response 0x{cmd:02X} for write to "
+                        f"0x{index:04X}:{sub:02X}"
+                    )
+                return b""
+
+            # upload response — return 4-byte payload (zero-padded)
+            payload = bytearray(4)
+            if cmd == SDOCommand.UPLOAD_RESP_4:
+                payload[:] = msg.data[4:8]
+            elif cmd == SDOCommand.UPLOAD_RESP_2:
+                payload[:2] = msg.data[4:6]
+            elif cmd == SDOCommand.UPLOAD_RESP_1:
+                payload[0] = msg.data[4]
+            else:
+                raise SDOError(
+                    f"Unexpected SDO upload response 0x{cmd:02X} for "
                     f"0x{index:04X}:{sub:02X}"
                 )
-            return b""
-
-        # upload response — return 4-byte payload (zero-padded)
-        payload = bytearray(4)
-        if cmd == SDOCommand.UPLOAD_RESP_4:
-            payload[:] = msg.data[4:8]
-        elif cmd == SDOCommand.UPLOAD_RESP_2:
-            payload[:2] = msg.data[4:6]
-        elif cmd == SDOCommand.UPLOAD_RESP_1:
-            payload[0] = msg.data[4]
-        else:
-            raise SDOError(
-                f"Unexpected SDO upload response 0x{cmd:02X} for "
-                f"0x{index:04X}:{sub:02X}"
+            log.debug(
+                "SDO RX ← 0x%03X  idx=0x%04X sub=%d  data=%s",
+                self._rx_cob, index, sub, payload.hex(),
             )
-        log.debug(
-            "SDO RX ← 0x%03X  idx=0x%04X sub=%d  data=%s",
-            self._rx_cob, index, sub, payload.hex(),
-        )
-        return bytes(payload)
+            return bytes(payload)

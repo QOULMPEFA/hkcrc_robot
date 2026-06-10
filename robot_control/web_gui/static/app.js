@@ -1,517 +1,1370 @@
-/* Robot Control Panel — client-side logic */
+/* Robot Control Panel — dashboard with draggable panels & layout persistence */
 
 const ROLE = document.body.dataset.role || "viewer";
 
-// ── Camera (WebRTC primary, MJPEG fallback) ─────────────────────────────────────
-const SRS_API = "http://frp-fit.com:35900";
-const cameraVideo = document.getElementById("camera-video");
-const cameraImg = document.getElementById("camera-img");
-const cameraErr = document.getElementById("camera-error");
-const camStatus = document.getElementById("cam-status");
+// ── module metadata ──────────────────────────────────────────────────────────
+const MODULE_META = {
+  camera: { icon: "📷", name: "摄像头", stub: false },
+  ugv:    { icon: "🛞", name: "UGV 底盘", stub: false },
+  lift:   { icon: "↕",  name: "升降平台", stub: false },
+  arm:    { icon: "🦾", name: "机械臂", stub: false },
+  hand:   { icon: "🤖", name: "灵巧手", stub: false },
+  motor:  { icon: "⚙",  name: "电机控制", stub: false },
+};
+let ACTIVE_MODULES = [];
 
-cameraImg.addEventListener("error", () => {
-  cameraImg.style.display = "none";
-  cameraErr.style.display = "flex";
-});
-cameraImg.addEventListener("load", () => {
-  cameraImg.style.display = "block";
-  cameraErr.style.display = "none";
-});
-
-function _switchToVideo() {
-  cameraImg.style.display = "none";
-  cameraErr.style.display = "none";
-  cameraVideo.style.display = "block";
-}
-
-(async function _connectWebRTC() {
-  try {
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    });
-
-    pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === "disconnected" ||
-          pc.iceConnectionState === "failed") {
-        camStatus.textContent = "WebRTC 断线 (MJPEG)";
-        camStatus.className = "badge disconnected";
-        cameraImg.style.display = "block";
-        cameraVideo.style.display = "none";
-      }
-    };
-
-    // Register ontrack BEFORE setRemoteDescription — the event fires during SRD.
-    let _fallbackTimer = setTimeout(() => {
-      camStatus.textContent = "MJPEG";
-      camStatus.className = "badge";
-    }, 8000);
-    pc.ontrack = (evt) => {
-      clearTimeout(_fallbackTimer);
-      cameraVideo.srcObject = evt.streams[0];
-      _switchToVideo();
-      camStatus.textContent = "WebRTC ✓";
-      camStatus.className = "badge connected";
-    };
-
-    pc.addTransceiver("video", { direction: "recvonly" });
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-
-    await new Promise((r) => {
-      if (pc.iceGatheringState === "complete") r();
-      else pc.addEventListener("icecandidate", (e) => { if (!e.candidate) r(); });
-    });
-
-    const resp = await fetch(SRS_API + "/rtc/v1/play/", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sdp: pc.localDescription.sdp,
-        streamurl: "webrtc://frp-fit.com/live/cam",
-        api: SRS_API + "/rtc/v1/play/",
-      }),
-    });
-
-    if (!resp.ok) throw new Error("API " + resp.status);
-
-    const data = await resp.json();
-    if (data.code !== 0) throw new Error("SRS " + data.code);
-
-    await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
-    camStatus.textContent = "WebRTC 协商中";
-    camStatus.className = "badge";
-  } catch (e) {
-    console.log("WebRTC camera fallback — " + e.message);
-    camStatus.textContent = "MJPEG";
-    camStatus.className = "badge";
-    cameraImg.style.display = "block";  // show MJPEG fallback
-  }
-})();
-
-const socket = io({ transports: ["websocket"] });
-
-// ── connection badge ──────────────────────────────────────────────────────────
-const connBadge = document.getElementById("conn-badge");
-socket.on("connect",    () => { connBadge.textContent = "Connected";    connBadge.className = "badge connected"; });
-socket.on("disconnect", () => { connBadge.textContent = "Disconnected"; connBadge.className = "badge disconnected"; });
-
-// Redirect to login if server says session is gone
-socket.on("redirect", (data) => { window.location.href = data.url; });
-
-// ── helpers ───────────────────────────────────────────────────────────────────
 const el  = (id) => document.getElementById(id);
 const fmt = (v, d = 2) => (typeof v === "number" ? v.toFixed(d) : "—");
 
-// ── viewer: disable all control buttons/inputs ────────────────────────────────
-function _applyViewerRestrictions() {
-  document.querySelectorAll("button.ctrl, .dpad-btn.ctrl").forEach((b) => {
-    b.disabled = true;
-    b.title = "观察员无操作权限";
+// ── Socket ───────────────────────────────────────────────────────────────────
+const socket = io({ transports: ["websocket"] });
+
+const connBadge = el("conn-badge");
+socket.on("connect", () => {
+  if (connBadge) { connBadge.textContent = "Connected"; connBadge.className = "badge connected"; }
+});
+socket.on("disconnect", () => {
+  if (connBadge) { connBadge.textContent = "Disconnected"; connBadge.className = "badge disconnected"; }
+});
+socket.on("redirect", (data) => { window.location.href = data.url; });
+
+// ── Module visibility ────────────────────────────────────────────────────────
+socket.on("connected", (info) => {
+  ACTIVE_MODULES = info.modules || [];
+  _renderSidebar();
+  LayoutManager.populateSelector();
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Sidebar
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _renderSidebar() {
+  const list = el("module-list");
+  if (!list) return;
+  list.innerHTML = "";
+  ACTIVE_MODULES.forEach((mod) => {
+    const meta = MODULE_META[mod] || { icon: "❓", name: mod, stub: false };
+    const isOpen = PanelManager.isOpen(mod);
+    const item = document.createElement("div");
+    item.className = "module-item" + (isOpen ? " active" : "") + (meta.stub ? " stub-module" : "");
+    item.innerHTML = `
+      <span class="module-icon">${meta.icon}</span>
+      <span class="module-name">${meta.name}${meta.stub ? '<span class="stub-tag">SDK待接入</span>' : ''}</span>
+      <span class="module-status" id="mod-status-${mod}"></span>
+    `;
+    if (!isOpen) {
+      item.addEventListener("click", () => {
+        PanelManager.open(mod);
+        _renderSidebar();
+      });
+    } else {
+      item.addEventListener("click", () => {
+        // Close all panels of this module
+        PanelManager.closeAll(mod);
+        _renderSidebar();
+      });
+    }
+    list.appendChild(item);
   });
-  ["lift-target", "lift-speed", "sl-linear", "sl-angular"].forEach((id) => {
-    const el_ = el(id);
-    if (el_) el_.disabled = true;
+
+  // Quick actions
+  const btnOpenAll = el("btn-open-all");
+  const btnCloseAll = el("btn-close-all");
+  if (btnOpenAll) btnOpenAll.onclick = () => { ACTIVE_MODULES.forEach((m) => { if (!PanelManager.isOpen(m)) PanelManager.open(m); }); _renderSidebar(); };
+  if (btnCloseAll) btnCloseAll.onclick = () => { PanelManager.closeAll(); _renderSidebar(); };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Panel Manager
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const PanelManager = {
+  _panels: new Map(),  // id → {module, el, size}
+  _counter: 0,
+
+  open(module, size) {
+    size = size || "medium";
+    const id = `panel-${module}-${++this._counter}`;
+    const meta = MODULE_META[module] || { icon: "❓", name: module };
+
+    const panel = document.createElement("div");
+    panel.className = `panel size-${size}`;
+    panel.id = id;
+    panel.dataset.module = module;
+    panel.dataset.size = size;
+    panel.innerHTML = `
+      <div class="panel-header" data-panel-id="${id}">
+        <span class="panel-icon">${meta.icon}</span>
+        <span class="panel-title">${meta.name}</span>
+        <span class="panel-status" id="${id}-status"></span>
+        <div class="panel-actions">
+          <button class="panel-btn panel-size" title="切换大小" data-action="resize">⛶</button>
+          <button class="panel-btn panel-minimize" title="最小化" data-action="minimize">–</button>
+          <button class="panel-btn panel-close" title="关闭" data-action="close">✕</button>
+        </div>
+      </div>
+      <div class="panel-body" id="${id}-body"></div>
+    `;
+
+    el("canvas").appendChild(panel);
+    this._panels.set(id, { module, el: panel, size });
+
+    // Render module-specific content
+    _renderPanelContent(id, module);
+
+    // Header button events
+    panel.querySelector(".panel-close").addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.close(id);
+      _renderSidebar();
+    });
+    panel.querySelector(".panel-minimize").addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.toggleMinimize(id);
+    });
+    panel.querySelector(".panel-size").addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.cycleSize(id);
+    });
+
+    // Drag initiation
+    DragManager.attach(panel);
+
+    // Scroll to new panel
+    panel.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    _checkEmptyState();
+    return id;
+  },
+
+  close(id) {
+    const p = this._panels.get(id);
+    if (!p) return;
+    _cleanupPanel(id, p.module);
+    p.el.remove();
+    this._panels.delete(id);
+    _checkEmptyState();
+  },
+
+  closeAll(module) {
+    this._panels.forEach((p, id) => {
+      if (!module || p.module === module) {
+        _cleanupPanel(id, p.module);
+        p.el.remove();
+        this._panels.delete(id);
+      }
+    });
+    _checkEmptyState();
+  },
+
+  isOpen(module) {
+    for (const p of this._panels.values()) {
+      if (p.module === module) return true;
+    }
+    return false;
+  },
+
+  toggleMinimize(id) {
+    const p = this._panels.get(id);
+    if (!p) return;
+    p.el.classList.toggle("minimized");
+  },
+
+  cycleSize(id) {
+    const p = this._panels.get(id);
+    if (!p) return;
+    const sizes = ["small", "medium", "large"];
+    const idx = sizes.indexOf(p.size);
+    p.size = sizes[(idx + 1) % sizes.length];
+    p.el.dataset.size = p.size;
+    p.el.className = p.el.className.replace(/size-\w+/g, `size-${p.size}`);
+  },
+
+  getLayout() {
+    const panels = [];
+    const canvas = el("canvas");
+    const children = canvas.querySelectorAll(".panel");
+    children.forEach((panel) => {
+      panels.push({
+        module: panel.dataset.module,
+        size: panel.dataset.size || "medium",
+        minimized: panel.classList.contains("minimized"),
+      });
+    });
+    return { panels };
+  },
+
+  applyLayout(layout) {
+    this.closeAll();
+    if (!layout || !layout.panels) return;
+    layout.panels.forEach((p) => {
+      const id = this.open(p.module, p.size || "medium");
+      if (p.minimized) this.toggleMinimize(id);
+    });
+    _renderSidebar();
+  },
+
+  // Health indicator updates
+  updateStatus(module, connected, isFault) {
+    // Sidebar dot
+    const dot = el(`mod-status-${module}`);
+    if (dot) {
+      dot.className = "module-status " + (connected ? (isFault ? "fault" : "online") : "offline");
+    }
+    // Panel status text
+    this._panels.forEach((p, id) => {
+      if (p.module === module) {
+        const st = el(`${id}-status`);
+        if (st) {
+          st.textContent = connected ? (isFault ? "⚠ 故障" : "✓ 在线") : "✗ 离线";
+          st.style.color = connected ? (isFault ? "var(--warn)" : "var(--accent2)") : "var(--danger)";
+        }
+      }
+    });
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Drag Manager (pointer-based)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DragManager = {
+  _dragData: null,
+
+  attach(panel) {
+    const header = panel.querySelector(".panel-header");
+    if (!header) return;
+
+    header.addEventListener("pointerdown", (e) => {
+      // Don't start drag on action buttons
+      if (e.target.closest("[data-action]")) return;
+      e.preventDefault();
+      this._start(e, panel);
+    });
+  },
+
+  _start(e, panel) {
+    const canvas = el("canvas");
+    const rect = panel.getBoundingClientRect();
+    this._dragData = {
+      panel,
+      startX: e.clientX,
+      startY: e.clientY,
+      origLeft: rect.left,
+      origTop: rect.top,
+      width: rect.width,
+      height: rect.height,
+      placeholder: null,
+      offsetX: e.clientX - rect.left,
+      offsetY: e.clientY - rect.top,
+    };
+
+    panel.style.zIndex = "50";
+    panel.classList.add("dragging");
+
+    document.addEventListener("pointermove", this._onMove);
+    document.addEventListener("pointerup", this._onUp);
+    document.addEventListener("pointercancel", this._onUp);
+  },
+
+  _onMove(e) {
+    const d = DragManager._dragData;
+    if (!d) return;
+
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+
+    if (!d.placeholder && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
+      // Lock in: create placeholder
+      d.placeholder = document.createElement("div");
+      d.placeholder.className = "panel";
+      d.placeholder.style.cssText = `width:${d.width}px;height:${d.height}px;border:2px dashed var(--border);background:transparent;`;
+      d.placeholder.id = "drag-placeholder";
+      d.panel.parentNode.insertBefore(d.placeholder, d.panel);
+      d.panel.style.position = "fixed";
+      d.panel.style.left = d.origLeft + "px";
+      d.panel.style.top = d.origTop + "px";
+      d.panel.style.width = d.width + "px";
+      d.panel.style.margin = "0";
+    }
+
+    if (d.placeholder) {
+      d.panel.style.left = (e.clientX - d.offsetX) + "px";
+      d.panel.style.top = (e.clientY - d.offsetY) + "px";
+
+      // Find target position
+      const canvas = el("canvas");
+      const children = [...canvas.querySelectorAll(".panel:not(.dragging):not(#drag-placeholder)")];
+      let targetBefore = null;
+      for (const child of children) {
+        const cr = child.getBoundingClientRect();
+        if (e.clientY < cr.top + cr.height / 2) {
+          targetBefore = child;
+          break;
+        }
+      }
+      if (targetBefore) {
+        canvas.insertBefore(d.placeholder, targetBefore);
+      } else if (children.length > 0) {
+        canvas.insertBefore(d.placeholder, children[children.length - 1].nextSibling);
+      }
+    }
+  },
+
+  _onUp(e) {
+    document.removeEventListener("pointermove", DragManager._onMove);
+    document.removeEventListener("pointerup", DragManager._onUp);
+    document.removeEventListener("pointercancel", DragManager._onUp);
+
+    const d = DragManager._dragData;
+    if (!d) return;
+
+    d.panel.classList.remove("dragging");
+    d.panel.style.position = "";
+    d.panel.style.left = "";
+    d.panel.style.top = "";
+    d.panel.style.width = "";
+    d.panel.style.margin = "";
+    d.panel.style.zIndex = "";
+
+    if (d.placeholder) {
+      d.placeholder.parentNode.insertBefore(d.panel, d.placeholder);
+      d.placeholder.remove();
+    }
+
+    DragManager._dragData = null;
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Layout Manager (localStorage)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const LS_KEY = "robot_control_layouts";
+
+const LayoutManager = {
+  _layouts: {},
+
+  init() {
+    try {
+      this._layouts = JSON.parse(localStorage.getItem(LS_KEY)) || {};
+    } catch (e) {
+      this._layouts = {};
+    }
+    this.populateSelector();
+  },
+
+  save(name) {
+    if (!name) { alert("请输入布局名称"); return; }
+    this._layouts[name] = {
+      ...PanelManager.getLayout(),
+      savedAt: new Date().toISOString(),
+    };
+    this._persist();
+    this.populateSelector();
+  },
+
+  load(name) {
+    const layout = this._layouts[name];
+    if (!layout) return;
+    PanelManager.applyLayout(layout);
+    // Update selector
+    const sel = el("layout-selector");
+    if (sel) sel.value = name;
+  },
+
+  delete(name) {
+    if (!confirm(`删除布局 "${name}"？`)) return;
+    delete this._layouts[name];
+    this._persist();
+    this.populateSelector();
+  },
+
+  getList() {
+    return Object.keys(this._layouts);
+  },
+
+  populateSelector() {
+    const sel = el("layout-selector");
+    if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = '<option value="">— 选择布局 —</option>';
+    Object.keys(this._layouts).sort().forEach((name) => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    });
+    sel.value = current;
+  },
+
+  _persist() {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(this._layouts));
+    } catch (e) {
+      console.warn("LayoutManager: localStorage full", e);
+    }
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Panel Content Renderers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _renderPanelContent(panelId, module) {
+  const body = el(panelId + "-body");
+  if (!body) return;
+  body.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px">加载中...</div>';
+
+  switch (module) {
+    case "camera": _renderCameraPanel(panelId, body); break;
+    case "ugv":    _renderUgvPanel(panelId, body); break;
+    case "lift":   _renderLiftPanel(panelId, body); break;
+    case "arm":    _renderArmPanel(panelId, body); break;
+    case "hand":   _renderHandPanel(panelId, body); break;
+    case "motor":  _renderMotorPanel(panelId, body); break;
+    default:       body.innerHTML = `<div style="color:var(--muted);padding:20px;text-align:center">模块 "${module}" 无 UI</div>`; break;
+  }
+}
+
+function _cleanupPanel(panelId, module) {
+  // Stop keyboard WASD when the UGV panel is closed
+  if (module === "ugv" && _ugvKeysActivePanel === panelId) {
+    _ugvKeysStop();
+  }
+}
+
+// Stop WASD when window loses focus (safety)
+window.addEventListener("blur", () => { if (_ugvKeysActivePanel) _ugvKeysStop(); });
+
+// ── Camera Panel ──────────────────────────────────────────────────────────────
+const _SRS_API_PORT = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
+const _cameraRTC = {};
+function _getSRSAPI() { return window.location.protocol + "//" + window.location.host + "/srs-api"; }
+
+function _renderCameraPanel(panelId, body) {
+  body.innerHTML = `
+    <div class="camera-wrap" id="${panelId}-cam-wrap">
+      <video id="${panelId}-cam-video" autoplay muted playsinline style="display:none"></video>
+      <img id="${panelId}-cam-img" src="/stream" alt="camera" />
+      <div class="camera-error" id="${panelId}-cam-err" style="display:none">摄像头未连接</div>
+    </div>
+    <div class="cam-status-line" id="${panelId}-cam-status">MJPEG</div>
+  `;
+
+  const img = el(panelId + "-cam-img");
+  const vid = el(panelId + "-cam-video");
+  const err = el(panelId + "-cam-err");
+  const status = el(panelId + "-cam-status");
+
+  if (img) {
+    img.addEventListener("error", () => { img.style.display = "none"; if (err) err.style.display = "flex"; });
+    img.addEventListener("load", () => { img.style.display = "block"; if (err) err.style.display = "none"; });
+  }
+
+  // WebRTC attempt
+  _initWebRTC(panelId, vid, img, status, err);
+}
+
+function _initWebRTC(panelId, vid, img, status, err) {
+  try {
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    _cameraRTC[panelId] = pc;
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === "disconnected" || pc.iceConnectionState === "failed") {
+        if (status) { status.textContent = "WebRTC 断线 (MJPEG)"; status.style.color = "var(--warn)"; }
+        if (img) img.style.display = "block";
+        if (vid) vid.style.display = "none";
+      }
+    };
+    let fallbackTimer = setTimeout(() => {
+      if (status) { status.textContent = "MJPEG"; status.style.color = "var(--muted)"; }
+    }, 8000);
+    pc.ontrack = (evt) => {
+      clearTimeout(fallbackTimer);
+      if (vid) { vid.srcObject = evt.streams[0]; vid.style.display = "block"; }
+      if (img) img.style.display = "none";
+      if (err) err.style.display = "none";
+      if (status) { status.textContent = "WebRTC ✓"; status.style.color = "var(--accent2)"; }
+    };
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.createOffer().then(async (offer) => {
+      await pc.setLocalDescription(offer);
+      await new Promise((r) => {
+        if (pc.iceGatheringState === "complete") r();
+        else pc.addEventListener("icecandidate", (e) => { if (!e.candidate) r(); });
+      });
+      const host = window.location.hostname;
+      const api = _getSRSAPI();
+      const streamUrl = "webrtc://" + host + "/live/cam";
+      const resp = await fetch(api + "/rtc/v1/play/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sdp: pc.localDescription.sdp, streamurl: streamUrl, api: api + "/rtc/v1/play/" }),
+      });
+      if (!resp.ok) throw new Error("API " + resp.status);
+      const data = await resp.json();
+      if (data.code !== 0) throw new Error("SRS " + data.code);
+      await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
+      if (status) { status.textContent = "WebRTC 协商中"; status.style.color = "var(--warn)"; }
+    }).catch((e) => {
+      console.log("WebRTC fallback — " + e.message);
+      if (status) { status.textContent = "MJPEG"; status.style.color = "var(--muted)"; }
+      if (img) img.style.display = "block";
+    });
+  } catch (e) {
+    console.log("WebRTC error — " + e.message);
+    if (img) img.style.display = "block";
+  }
+}
+
+// ── UGV Panel ─────────────────────────────────────────────────────────────────
+// ── Keyboard WASD state ──────────────────────────────────────────────────────
+const _ugvKeys = { w: false, a: false, s: false, d: false };
+let _ugvKeysInterval = null;
+let _ugvKeysActivePanel = null;
+
+function _ugvKeysStart(panelId) {
+  _ugvKeysActivePanel = panelId;
+  if (_ugvKeysInterval) return;
+  _ugvKeysInterval = setInterval(() => {
+    if (!_ugvKeysActivePanel) return;
+    let lin = 0, ang = 0;
+    if (_ugvKeys.w) lin += 1;
+    if (_ugvKeys.s) lin -= 1;
+    if (_ugvKeys.a) ang += 1;
+    if (_ugvKeys.d) ang -= 1;
+    if (lin !== 0 || ang !== 0) {
+      const slLin  = el(_ugvKeysActivePanel + "-sl-linear");
+      const slAng  = el(_ugvKeysActivePanel + "-sl-angular");
+      lin *= parseFloat(slLin?.value || 0.5);
+      ang *= parseFloat(slAng?.value || 0.5);
+      socket.emit("ugv_velocity", { linear: lin, angular: ang });
+    } else {
+      socket.emit("ugv_stop");
+    }
+  }, 80);
+}
+
+function _ugvKeysStop() {
+  if (_ugvKeysInterval) { clearInterval(_ugvKeysInterval); _ugvKeysInterval = null; }
+  _ugvKeysActivePanel = null;
+  _ugvKeys.w = _ugvKeys.a = _ugvKeys.s = _ugvKeys.d = false;
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!_ugvKeysActivePanel) return;
+  const tag = document.activeElement?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  const k = e.key.toLowerCase();
+  if (k in _ugvKeys) { e.preventDefault(); _ugvKeys[k] = true; }
+});
+
+document.addEventListener("keyup", (e) => {
+  const k = e.key.toLowerCase();
+  if (k in _ugvKeys) { e.preventDefault(); _ugvKeys[k] = false; }
+});
+
+
+function _renderUgvPanel(panelId, body) {
+  body.innerHTML = `
+    <div class="status-row">
+      <span>连接：<b id="${panelId}-ugv-connected">—</b></span>
+      <span>电池：<b id="${panelId}-ugv-battery">—</b> V</span>
+      <span>SOC：<b id="${panelId}-ugv-soc">—</b>%</span>
+      <span>线速度：<b id="${panelId}-ugv-linear">—</b></span>
+      <span>角速度：<b id="${panelId}-ugv-angular">—</b></span>
+    </div>
+    <div class="btn-row">
+      <button class="btn-primary ctrl"    id="${panelId}-ugv-enable">使能 CAN 模式</button>
+      <button class="btn-warn ctrl"       id="${panelId}-ugv-reset">清除故障</button>
+      <button class="btn-secondary"       id="${panelId}-restart-can">重启 CAN</button>
+    </div>
+    <div id="${panelId}-ugv-disabled-msg" style="text-align:center;padding:20px;color:var(--warn);font-size:14px">
+      ⚠ 底盘处于<b>待机模式</b> — 点击<em>「使能 CAN 模式」</em>后可控制
+    </div>
+    <div id="${panelId}-ugv-controls" style="display:none">
+      <div class="dpad">
+        <button class="dpad-btn ctrl" data-l="1.0"  data-a="0.0">▲</button>
+        <button class="dpad-btn ctrl" data-l="0.0"  data-a="1.0">◄</button>
+        <button class="dpad-btn ctrl" data-l="0.0"  data-a="0.0">■</button>
+        <button class="dpad-btn ctrl" data-l="0.0"  data-a="-1.0">►</button>
+        <button class="dpad-btn ctrl" data-l="-1.0" data-a="0.0">▼</button>
+      </div>
+      <div style="text-align:center;color:var(--muted);font-size:11px;margin:8px 0">
+        ⌨ 键盘: <b>W</b>前 <b>S</b>后 <b>A</b>左 <b>D</b>右 — 组合键支持斜面移动
+      </div>
+      <div class="slider-row">
+        <label>线速度 <span id="${panelId}-lbl-linear">0.5</span> m/s
+          <input type="range" id="${panelId}-sl-linear" min="0.1" max="1.5" step="0.1" value="0.5" />
+        </label>
+        <label>角速度 <span id="${panelId}-lbl-angular">0.5</span> rad/s
+          <input type="range" id="${panelId}-sl-angular" min="0.1" max="1.0" step="0.1" value="0.5" />
+        </label>
+      </div>
+    </div>
+    <div class="panel-diag">
+      <span>车辆状态: <b id="${panelId}-ugv-vehicle-state">—</b></span>
+      <span>控制模式: <b id="${panelId}-ugv-control-mode">—</b></span>
+      <button id="${panelId}-btn-toggle-ugv-log" class="btn-sm">运行日志 ▾</button>
+    </div>
+    <div class="panel-log" id="${panelId}-ugv-log-panel"></div>
+  `;
+
+  // D-pad
+  const slLinear  = el(panelId + "-sl-linear");
+  const slAngular = el(panelId + "-sl-angular");
+  if (slLinear) {
+    slLinear.addEventListener("input", () => {
+      const lbl = el(panelId + "-lbl-linear"); if (lbl) lbl.textContent = slLinear.value;
+    });
+  }
+  if (slAngular) {
+    slAngular.addEventListener("input", () => {
+      const lbl = el(panelId + "-lbl-angular"); if (lbl) lbl.textContent = slAngular.value;
+    });
+  }
+
+  body.querySelectorAll(".dpad-btn").forEach((btn) => {
+    let interval = null;
+    const start = (e) => {
+      btn.setPointerCapture(e.pointerId);
+      const send = () => {
+        const l = parseFloat(btn.dataset.l) * parseFloat(slLinear?.value || 0.5);
+        const a = parseFloat(btn.dataset.a) * parseFloat(slAngular?.value || 0.5);
+        socket.emit("ugv_velocity", { linear: l, angular: a });
+      };
+      send();
+      interval = setInterval(send, 50);
+    };
+    const stop = () => { if (interval) { clearInterval(interval); interval = null; } socket.emit("ugv_stop"); };
+    btn.addEventListener("pointerdown", start);
+    btn.addEventListener("pointerup", stop);
+    btn.addEventListener("pointercancel", stop);
+  });
+
+  const btnEn  = el(panelId + "-ugv-enable");
+  const btnRst = el(panelId + "-ugv-reset");
+  if (btnEn)  btnEn.addEventListener("click",  () => { socket.emit("ugv_enable"); _ugvKeysStart(panelId); });
+  if (btnRst) btnRst.addEventListener("click", () => socket.emit("ugv_reset"));
+
+  const btnCan = el(panelId + "-restart-can");
+  if (btnCan) {
+    btnCan.addEventListener("click", () => {
+      btnCan.disabled = true; btnCan.textContent = "重启中...";
+      socket.emit("restart_can");
+    });
+  }
+
+  // Log toggle
+  const btnLog = el(panelId + "-btn-toggle-ugv-log");
+  const logPanel = el(panelId + "-ugv-log-panel");
+  if (btnLog && logPanel) {
+    btnLog.addEventListener("click", () => _togglePanelLog(logPanel, btnLog, "运行日志"));
+  }
+
+  // store refs for state update
+  body.dataset.panelId = panelId;
+}
+
+// ── Lift Panel ────────────────────────────────────────────────────────────────
+function _renderLiftPanel(panelId, body) {
+  body.innerHTML = `
+    <div class="status-row">
+      <span>高度：<b id="${panelId}-lift-height">—</b> mm</span>
+      <span>速度：<b id="${panelId}-lift-vel">—</b> mm/s</span>
+      <span>转矩：<b id="${panelId}-lift-torque">—</b> ‰</span>
+      <span id="${panelId}-lift-fault-badge" class="badge fault" style="display:none">FAULT</span>
+    </div>
+    <div class="input-row">
+      <label>目标高度 (mm)
+        <input type="number" id="${panelId}-lift-target" min="-9999" max="9999" step="10" value="200" />
+      </label>
+      <label>速度 (mm/s)
+        <input type="number" id="${panelId}-lift-speed" min="1" max="50" step="1" value="10" />
+      </label>
+    </div>
+    <div class="btn-row">
+      <button class="btn-primary ctrl"   id="${panelId}-lift-move">移动</button>
+      <button class="btn-secondary ctrl" id="${panelId}-lift-stop">停止</button>
+      <button class="btn-secondary ctrl" id="${panelId}-lift-home">回零</button>
+      <button class="btn-warn ctrl"      id="${panelId}-lift-reset">清除故障</button>
+    </div>
+    <div class="btn-row" id="${panelId}-lift-presets"></div>
+    <div class="panel-diag">
+      <span>驱动器: <b id="${panelId}-lift-drive-state">—</b></span>
+      <span>SW: <b id="${panelId}-lift-sw">—</b></span>
+      <button id="${panelId}-btn-toggle-lift-log" class="btn-sm">运行日志 ▾</button>
+    </div>
+    <div class="panel-log" id="${panelId}-lift-log-panel"></div>
+  `;
+
+  // Presets
+  _rebuildPresetsFor(panelId, 0, 500);
+
+  const btnMove  = el(panelId + "-lift-move");
+  const btnStop  = el(panelId + "-lift-stop");
+  const btnHome  = el(panelId + "-lift-home");
+  const btnReset = el(panelId + "-lift-reset");
+  if (btnMove) btnMove.addEventListener("click", () => {
+    socket.emit("lift_move", {
+      height_mm: parseFloat(el(panelId + "-lift-target")?.value || 0),
+      speed_mm_s: parseFloat(el(panelId + "-lift-speed")?.value || 10),
+    });
+  });
+  if (btnStop)  btnStop.addEventListener("click",  () => socket.emit("lift_stop"));
+  if (btnHome)  btnHome.addEventListener("click",  () => socket.emit("lift_move", {
+    height_mm: 0.0, speed_mm_s: parseFloat(el(panelId + "-lift-speed")?.value || 10),
+  }));
+  if (btnReset) btnReset.addEventListener("click", () => socket.emit("lift_reset_fault"));
+
+  const btnLog = el(panelId + "-btn-toggle-lift-log");
+  const logPanel = el(panelId + "-lift-log-panel");
+  if (btnLog && logPanel) btnLog.addEventListener("click", () => _togglePanelLog(logPanel, btnLog, "运行日志"));
+}
+
+function _rebuildPresetsFor(panelId, minMm, maxMm) {
+  const container = el(panelId + "-lift-presets");
+  if (!container) return;
+  container.innerHTML = "";
+  const range = maxMm - minMm;
+  [0, 0.25, 0.5, 0.75, 1.0].forEach((f) => {
+    const h = Math.round(minMm + range * f);
+    const btn = document.createElement("button");
+    btn.className = "btn-preset" + (ROLE === "viewer" ? " ctrl" : "");
+    btn.textContent = `${h} mm`;
+    if (ROLE !== "viewer") {
+      btn.addEventListener("click", () => {
+        const tgt = el(panelId + "-lift-target");
+        const spd = el(panelId + "-lift-speed");
+        if (tgt) tgt.value = h;
+        socket.emit("lift_move", { height_mm: h, speed_mm_s: spd ? parseFloat(spd.value) : 10 });
+      });
+    } else { btn.disabled = true; }
+    container.appendChild(btn);
   });
 }
-if (ROLE === "viewer") _applyViewerRestrictions();
 
-// ── state display ─────────────────────────────────────────────────────────────
+// ── Arm Panel ─────────────────────────────────────────────────────────────────
+function _renderArmPanel(panelId, body) {
+  body.innerHTML = `
+    <div class="status-row">
+      <span>连接：<b id="${panelId}-arm-connected">—</b></span>
+      <span>使能：<b id="${panelId}-arm-enabled">—</b></span>
+      <span>运动中：<b id="${panelId}-arm-moving">—</b></span>
+      <span>模式：<b id="${panelId}-arm-robot-mode">—</b></span>
+      <span>安全：<b id="${panelId}-arm-safety-mode">—</b></span>
+      <span id="${panelId}-arm-fault-badge" class="badge fault" style="display:none">FAULT</span>
+    </div>
+    <div class="slider-row">
+      <label>运动速度 <span id="${panelId}-lbl-arm-speed">20</span>%
+        <input type="range" id="${panelId}-sl-arm-speed" min="1" max="100" step="1" value="20" />
+      </label>
+    </div>
+    <div class="joint-grid" id="${panelId}-arm-joints"></div>
+    <div class="btn-row">
+      <button class="btn-primary ctrl"   id="${panelId}-arm-enable">使能</button>
+      <button class="btn-secondary ctrl" id="${panelId}-arm-disable">断开动力</button>
+      <button class="btn-primary ctrl"   id="${panelId}-arm-home">回零</button>
+      <button class="btn-secondary ctrl" id="${panelId}-arm-stop">停止</button>
+      <button class="btn-warn ctrl"      id="${panelId}-arm-reset">解除保护性停止</button>
+    </div>
+    <div class="panel-diag">
+      <button id="${panelId}-btn-toggle-arm-log" class="btn-sm">运行日志 ▾</button>
+    </div>
+    <div class="panel-log" id="${panelId}-arm-log-panel"></div>
+  `;
+
+  const ARM_JOINTS = ["J1", "J2", "J3", "J4", "J5", "J6"];
+  const armGrid = el(panelId + "-arm-joints");
+  const slSpeed = el(panelId + "-sl-arm-speed");
+
+  const _sendCurrentAngles = () => {
+    const angles = ARM_JOINTS.map((_, i) => {
+      const inp = el(panelId + `-arm-j${i}`); return inp ? parseFloat(inp.value) : 0;
+    });
+    socket.emit("arm_move_joints", { angles, speed_pct: parseInt(slSpeed?.value || 20) });
+  };
+
+  if (armGrid) {
+    ARM_JOINTS.forEach((name, i) => {
+      const row = document.createElement("div");
+      row.className = "joint-row";
+      row.innerHTML = `
+        <label>${name}</label>
+        <button class="dpad-btn" style="width:28px;height:28px;font-size:14px;margin-right:2px" data-j="${i}" data-d="-5">◀</button>
+        <input type="range" id="${panelId}-arm-j${i}" min="-180" max="180" step="1" value="0" />
+        <button class="dpad-btn" style="width:28px;height:28px;font-size:14px;margin-left:2px" data-j="${i}" data-d="5">▶</button>
+        <span class="val" id="${panelId}-arm-j${i}-val">0.0°</span>
+      `;
+      armGrid.appendChild(row);
+
+      const slider = row.querySelector("input");
+      slider.addEventListener("input", (e) => {
+        const valEl = el(panelId + `-arm-j${i}-val`);
+        if (valEl) valEl.textContent = parseFloat(e.target.value).toFixed(1) + "°";
+      });
+      slider.addEventListener("change", () => _sendCurrentAngles());
+
+      row.querySelectorAll("button").forEach(btn => {
+        let interval = null;
+        btn.addEventListener("pointerdown", (e) => {
+          btn.setPointerCapture(e.pointerId);
+          const delta = parseFloat(btn.dataset.d);
+          const update = () => {
+            const sl = el(panelId + `-arm-j${btn.dataset.j}`);
+            if (sl) {
+              sl.value = Math.max(-180, Math.min(180, parseFloat(sl.value) + delta));
+              sl.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+          };
+          update();
+          interval = setInterval(update, 100);
+        });
+        btn.addEventListener("pointerup", () => {
+          if (interval) { clearInterval(interval); interval = null; }
+          _sendCurrentAngles();
+        });
+        btn.addEventListener("pointercancel", () => {
+          if (interval) { clearInterval(interval); interval = null; }
+        });
+      });
+    });
+  }
+
+  if (slSpeed) {
+    slSpeed.addEventListener("input", () => {
+      const lbl = el(panelId + "-lbl-arm-speed"); if (lbl) lbl.textContent = slSpeed.value;
+    });
+  }
+
+  const btnHome    = el(panelId + "-arm-home");
+  const btnStop    = el(panelId + "-arm-stop");
+  const btnEnable  = el(panelId + "-arm-enable");
+  const btnDisable = el(panelId + "-arm-disable");
+  const btnReset   = el(panelId + "-arm-reset");
+
+  if (btnHome)    btnHome.addEventListener("click",    () => socket.emit("arm_home"));
+  if (btnStop)    btnStop.addEventListener("click",    () => socket.emit("arm_stop"));
+  if (btnEnable)  btnEnable.addEventListener("click",  () => socket.emit("arm_enable"));
+  if (btnDisable) btnDisable.addEventListener("click", () => socket.emit("arm_disable"));
+  if (btnReset)   btnReset.addEventListener("click",   () => socket.emit("arm_reset_fault"));
+
+  const btnLog = el(panelId + "-btn-toggle-arm-log");
+  const logPanel = el(panelId + "-arm-log-panel");
+  if (btnLog && logPanel) btnLog.addEventListener("click", () => _togglePanelLog(logPanel, btnLog, "运行日志"));
+}
+
+// ── Hand Panel ────────────────────────────────────────────────────────────────
+function _renderHandPanel(panelId, body) {
+  body.innerHTML = `
+    <div class="status-row">
+      <span>状态：<b id="${panelId}-hand-enabled">—</b></span>
+      <span>夹持力：<b id="${panelId}-hand-force">—</b> N</span>
+    </div>
+    <div class="finger-grid" id="${panelId}-hand-fingers"></div>
+    <div class="btn-row">
+      <button class="btn-primary ctrl"   id="${panelId}-hand-open">张开</button>
+      <button class="btn-primary ctrl"   id="${panelId}-hand-close">握拳</button>
+      <button class="btn-secondary ctrl" id="${panelId}-hand-pinch">捏取</button>
+      <button class="btn-secondary ctrl" id="${panelId}-hand-send">发送</button>
+    </div>
+  `;
+
+  const FINGERS = ["拇指", "食指", "中指", "无名指", "小指"];
+  const grid = el(panelId + "-hand-fingers");
+  if (grid) {
+    FINGERS.forEach((name, i) => {
+      const row = document.createElement("div");
+      row.className = "finger-row";
+      row.innerHTML = `
+        <label>${name}</label>
+        <input type="range" id="${panelId}-hand-f${i}" min="0" max="1" step="0.01" value="0" />
+        <span class="val" id="${panelId}-hand-f${i}-val">0%</span>
+      `;
+      grid.appendChild(row);
+      row.querySelector("input").addEventListener("input", (e) => {
+        const valEl = el(panelId + `-hand-f${i}-val`);
+        if (valEl) valEl.textContent = Math.round(parseFloat(e.target.value) * 100) + "%";
+      });
+    });
+  }
+
+  const btnOpen  = el(panelId + "-hand-open");
+  const btnClose = el(panelId + "-hand-close");
+  const btnPinch = el(panelId + "-hand-pinch");
+  const btnSend  = el(panelId + "-hand-send");
+  if (btnOpen)  btnOpen.addEventListener("click",  () => socket.emit("hand_open"));
+  if (btnClose) btnClose.addEventListener("click", () => socket.emit("hand_close"));
+  if (btnPinch) btnPinch.addEventListener("click", () => socket.emit("hand_pinch"));
+  if (btnSend)  btnSend.addEventListener("click",  () => {
+    const positions = FINGERS.map((_, i) => {
+      const inp = el(panelId + `-hand-f${i}`); return inp ? parseFloat(inp.value) : 0;
+    });
+    socket.emit("hand_set_fingers", { positions, speed_pct: 50 });
+  });
+}
+
+// ── Motor Panel ────────────────────────────────────────────────────────────────
+function _renderMotorPanel(panelId, body) {
+  body.innerHTML = `
+    <div class="status-row">
+      <span>状态：<b id="${panelId}-motor-connected">—</b></span>
+      <span>方向：<b id="${panelId}-motor-direction">停止</b></span>
+    </div>
+    <div class="dpad motor-dpad">
+      <button class="dpad-btn ctrl" data-dir="forward">▲</button>
+      <button class="dpad-btn ctrl" data-dir="left">◄</button>
+      <button class="dpad-btn ctrl" data-dir="stop">■</button>
+      <button class="dpad-btn ctrl" data-dir="right">►</button>
+      <button class="dpad-btn ctrl" data-dir="backward">▼</button>
+    </div>
+  `;
+
+  const dirMap = {
+    forward: "motor_forward",
+    backward: "motor_backward",
+    left: "motor_left",
+    right: "motor_right",
+    stop: "motor_stop",
+  };
+
+  body.querySelectorAll(".dpad-btn").forEach((btn) => {
+    const dir = btn.dataset.dir;
+    const event = dirMap[dir];
+    if (!event) return;
+
+    let interval = null;
+    const start = (e) => {
+      btn.setPointerCapture(e.pointerId);
+      const send = () => socket.emit(event);
+      send();
+      interval = setInterval(send, 50);
+    };
+    const stop = () => {
+      if (interval) { clearInterval(interval); interval = null; }
+      if (dir !== "stop") socket.emit("motor_stop");
+    };
+    btn.addEventListener("pointerdown", start);
+    btn.addEventListener("pointerup", stop);
+    btn.addEventListener("pointercancel", stop);
+  });
+}
+
+function _updateMotorState(panelId, s) {
+  _maybeSet(el(panelId + "-motor-connected"), s.connected ? "已连接" : "mock");
+  const dirEl = el(panelId + "-motor-direction");
+  if (dirEl) {
+    const labels = { forward: "前进", backward: "后退", left: "左转", right: "右转", stop: "停止" };
+    dirEl.textContent = labels[s.direction] || s.direction;
+    dirEl.style.color = s.direction !== "stop" ? "var(--accent2)" : "var(--muted)";
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// State Handler
+// ═══════════════════════════════════════════════════════════════════════════════
+
 socket.on("robot_state", (s) => {
-  // UGV
-  el("ugv-connected").textContent = s.ugv.connected ? "✓ 已连接" : "✗ 未连接";
-  el("ugv-battery").textContent   = fmt(s.ugv.battery_voltage, 1);
-  el("ugv-linear").textContent    = fmt(s.ugv.linear_velocity);
-  el("ugv-angular").textContent   = fmt(s.ugv.angular_velocity);
-  el("ugv-soc").textContent       = s.ugv.bms_soc != null ? s.ugv.bms_soc : "—";
+  // Find all open panels and update their content
+  PanelManager._panels.forEach((p, panelId) => {
+    const modState = s[p.module];
+    if (!modState) return;
 
-  // UGV diagnostics
-  const vsEl = el("ugv-vehicle-state");
-  const cmEl = el("ugv-control-mode");
+    switch (p.module) {
+      case "ugv":
+        _updateUgvState(panelId, modState);
+        PanelManager.updateStatus("ugv", modState.connected, modState.vehicle_state === 2);
+        break;
+      case "lift":
+        _updateLiftState(panelId, modState);
+        PanelManager.updateStatus("lift", modState.connected, modState.is_fault);
+        break;
+      case "arm":
+        _updateArmState(panelId, modState);
+        PanelManager.updateStatus("arm", modState.connected, modState.is_fault);
+        break;
+      case "hand":
+        _updateHandState(panelId, modState);
+        PanelManager.updateStatus("hand", modState.connected, modState.is_fault);
+        break;
+      case "camera":
+        PanelManager.updateStatus("camera", modState.connected, false);
+        break;
+      case "motor":
+        _updateMotorState(panelId, modState);
+        PanelManager.updateStatus("motor", modState.connected, false);
+        break;
+    }
+  });
+
+  // Also update sidebar status dots for modules without panels
+  ACTIVE_MODULES.forEach((mod) => {
+    if (!PanelManager.isOpen(mod) && s[mod]) {
+      PanelManager.updateStatus(mod, s[mod].connected,
+        s[mod].is_fault || s[mod].vehicle_state === 2 || false);
+    }
+  });
+
+  _maybeSet(el("last-update"), "最后更新：" + new Date().toLocaleTimeString());
+});
+
+function _updateUgvState(panelId, s) {
+  _maybeSet(el(panelId + "-ugv-connected"), s.connected ? "✓ 已连接" : "✗ 未连接");
+  _maybeSet(el(panelId + "-ugv-battery"), fmt(s.battery_voltage, 1));
+  _maybeSet(el(panelId + "-ugv-linear"), fmt(s.linear_velocity));
+  _maybeSet(el(panelId + "-ugv-angular"), fmt(s.angular_velocity));
+  _maybeSet(el(panelId + "-ugv-soc"), s.bms_soc != null ? s.bms_soc : "—");
+  const vsEl = el(panelId + "-ugv-vehicle-state");
   if (vsEl) {
     const vsLabels = {0: "正常", 1: "急停", 2: "异常"};
-    vsEl.textContent = vsLabels[s.ugv.vehicle_state] || s.ugv.vehicle_state;
-    vsEl.style.color = s.ugv.vehicle_state === 0 ? "#4caf50" : s.ugv.vehicle_state === 1 ? "#ff9800" : "#f44336";
+    vsEl.textContent = vsLabels[s.vehicle_state] || s.vehicle_state;
+    vsEl.style.color = s.vehicle_state === 0 ? "#4caf50" : s.vehicle_state === 1 ? "#ff9800" : "#f44336";
   }
+  const cmEl = el(panelId + "-ugv-control-mode");
+  const enabled = s.control_mode === 1;
   if (cmEl) {
     const cmLabels = {0: "待机", 1: "CAN指令", 2: "UART", 3: "遥控器"};
-    cmEl.textContent = cmLabels[s.ugv.control_mode] || s.ugv.control_mode;
-    cmEl.style.color = s.ugv.control_mode === 1 ? "#4caf50" : s.ugv.control_mode === 0 ? "#f44336" : "#ff9800";
+    cmEl.textContent = cmLabels[s.control_mode] || s.control_mode;
+    cmEl.style.color = enabled ? "#4caf50" : s.control_mode === 0 ? "#f44336" : "#ff9800";
+  }
+  // Toggle controls visibility
+  const controls = el(panelId + "-ugv-controls");
+  const disabledMsg = el(panelId + "-ugv-disabled-msg");
+  if (controls) controls.style.display = enabled ? "" : "none";
+  if (disabledMsg) disabledMsg.style.display = enabled ? "none" : "";
+  // Enable button state
+  const btnEn = el(panelId + "-ugv-enable");
+  if (btnEn) {
+    if (enabled) { btnEn.textContent = "✓ 已使能 (CAN指令)"; btnEn.disabled = true; btnEn.style.opacity = "0.6"; }
+    else        { btnEn.textContent = "使能 CAN 模式"; btnEn.disabled = false; btnEn.style.opacity = ""; }
+  }
+  // Keyboard WASD: start when enabled, stop when disabled
+  if (enabled && PanelManager.isOpen("ugv")) {
+    if (_ugvKeysActivePanel !== panelId) _ugvKeysStart(panelId);
+  } else if (_ugvKeysActivePanel === panelId) {
+    _ugvKeysStop();
+  }
+  _updateLogPanel(panelId + "-ugv-log-panel", s.logs);
+}
+
+function _updateLiftState(panelId, s) {
+  _maybeSet(el(panelId + "-lift-height"), fmt(s.height_mm, 1));
+  _maybeSet(el(panelId + "-lift-vel"), fmt(s.velocity_mm_s, 1));
+  _maybeSet(el(panelId + "-lift-torque"), s.torque_permille ?? "—");
+  const fb = el(panelId + "-lift-fault-badge");
+  if (fb) fb.style.display = s.is_fault ? "inline-block" : "none";
+
+  if (typeof s.min_mm === "number") {
+    _rebuildPresetsFor(panelId, s.min_mm, s.max_mm);
+    const inMin = el(panelId + "-lift-target"); // keep current target
+    const inSpd = el(panelId + "-lift-speed");
   }
 
-  // UGV operation log
-  const ugvLogPanel = el("ugv-log-panel");
-  if (ugvLogPanel && s.ugv.logs && s.ugv.logs.length > 0) {
-    const lastTs = ugvLogPanel.dataset.lastTs || "0";
-    const latest = s.ugv.logs[s.ugv.logs.length - 1];
-    if (latest.ts > parseFloat(lastTs)) {
-      ugvLogPanel.dataset.lastTs = latest.ts;
-      ugvLogPanel.innerHTML = s.ugv.logs.map(e => {
-        const t = new Date(e.ts * 1000).toLocaleTimeString();
-        const cls = e.level === "error" ? "#f44336" : e.level === "warn" ? "#ff9800" : "#999";
-        return `<div style="color:${cls};line-height:1.6">${t} [${e.level.toUpperCase()}] ${e.msg}</div>`;
-      }).join("");
-      ugvLogPanel.scrollTop = ugvLogPanel.scrollHeight;
-    }
+  const dsEl = el(panelId + "-lift-drive-state");
+  if (dsEl) {
+    dsEl.textContent = s.drive_state || "—";
+    const ds = s.drive_state || "";
+    dsEl.style.color = ds.toLowerCase().includes("fault") ? "#f44336"
+      : ds.toLowerCase().includes("operation") ? "#4caf50" : "#ff9800";
   }
+  _maybeSet(el(panelId + "-lift-sw"), s.statusword || "—");
+  _updateLogPanel(panelId + "-lift-log-panel", s.logs);
+}
 
-  // Lift
-  el("lift-height").textContent = fmt(s.lift.height_mm, 1);
-  el("lift-vel").textContent    = fmt(s.lift.velocity_mm_s, 1);
-  el("lift-torque").textContent = s.lift.torque_permille ?? "—";
-  const faultBadge = el("lift-fault-badge");
-  faultBadge.style.display = s.lift.is_fault ? "inline-block" : "none";
-
-  if (typeof s.lift.min_mm === "number") {
-    // Update modal display (admin only — elements may not exist)
-    const lmin = el("lift-limit-min");
-    const lmax = el("lift-limit-max");
-    const loff = el("lift-zero-offset");
-    if (lmin) lmin.textContent = s.lift.min_mm.toFixed(1);
-    if (lmax) lmax.textContent = s.lift.max_mm.toFixed(1);
-    if (loff) loff.textContent = s.lift.zero_offset_mm.toFixed(1);
-    const inMin = el("lift-min-mm");
-    const inMax = el("lift-max-mm");
-    if (inMin && document.activeElement !== inMin) inMin.value = s.lift.min_mm;
-    if (inMax && document.activeElement !== inMax) inMax.value = s.lift.max_mm;
-    _rebuildPresets(s.lift.min_mm, s.lift.max_mm);
+function _updateArmState(panelId, s) {
+  _maybeSet(el(panelId + "-arm-connected"), s.connected ? "已连接" : "未连接");
+  _maybeSet(el(panelId + "-arm-enabled"), s.is_enabled ? "已使能" : "未使能");
+  _maybeSet(el(panelId + "-arm-moving"), s.is_moving ? "运动中" : "静止");
+  _maybeSet(el(panelId + "-arm-robot-mode"), s.robot_mode || "—");
+  _maybeSet(el(panelId + "-arm-safety-mode"), s.safety_mode || "—");
+  const smEl = el(panelId + "-arm-safety-mode");
+  if (smEl) {
+    const sm = (s.safety_mode || "").toUpperCase();
+    smEl.style.color = sm === "NORMAL" ? "#4caf50"
+      : sm.includes("PROTECTIVE") || sm.includes("REDUCED") ? "#ff9800" : "#f44336";
   }
-
-  // Lift CAN diagnostics + operation log
-  const dsEl2 = el("lift-drive-state");
-  const swEl2 = el("lift-sw");
-  if (dsEl2) {
-    dsEl2.textContent = s.lift.drive_state || "—";
-    const ds = s.lift.drive_state || "";
-    if (ds.toLowerCase().includes("fault")) dsEl2.style.color = "#f44336";
-    else if (ds.toLowerCase().includes("operation")) dsEl2.style.color = "#4caf50";
-    else dsEl2.style.color = "#ff9800";
+  const afb = el(panelId + "-arm-fault-badge");
+  if (afb) {
+    afb.style.display = s.is_fault ? "inline-block" : "none";
+    if (s.is_fault && s.fault_text) afb.title = s.fault_text;
   }
-  if (swEl2) swEl2.textContent = s.lift.statusword || "—";
-  const logPanel = el("lift-log-panel");
-  if (logPanel && s.lift.logs && s.lift.logs.length > 0) {
-    const lastTs = logPanel.dataset.lastTs || "0";
-    const latest = s.lift.logs[s.lift.logs.length - 1];
-    if (latest.ts > parseFloat(lastTs)) {
-      logPanel.dataset.lastTs = latest.ts;
-      logPanel.innerHTML = s.lift.logs.map(e => {
-        const t = new Date(e.ts * 1000).toLocaleTimeString();
-        const cls = e.level === "error" ? "#f44336" : e.level === "warn" ? "#ff9800" : "#999";
-        return `<div style="color:${cls};line-height:1.6">${t} [${e.level.toUpperCase()}] ${e.msg}</div>`;
-      }).join("");
-      logPanel.scrollTop = logPanel.scrollHeight;
-    }
-  }
-
-  // Arm
-  el("arm-enabled").textContent = s.arm.is_enabled ? "已使能" : "未使能";
-  el("arm-moving").textContent  = s.arm.is_moving  ? "运动中" : "静止";
-  if (s.arm.joint_angles_deg) {
-    s.arm.joint_angles_deg.forEach((angle, i) => {
-      const sl  = el(`arm-j${i}`);
-      const val = el(`arm-j${i}-val`);
+  if (s.joint_angles_deg) {
+    s.joint_angles_deg.forEach((angle, i) => {
+      const sl = el(panelId + `-arm-j${i}`);
+      const val = el(panelId + `-arm-j${i}-val`);
       if (sl && !sl.matches(":active")) sl.value = angle;
       if (val) val.textContent = fmt(angle, 1) + "°";
     });
   }
+  _updateLogPanel(panelId + "-arm-log-panel", s.logs);
+}
 
-  // Hand
-  el("hand-enabled").textContent = s.hand.is_enabled ? "已使能" : "未使能";
-  el("hand-force").textContent   = fmt(s.hand.grip_force_n, 1);
-  if (s.hand.finger_positions) {
-    s.hand.finger_positions.forEach((pos, i) => {
-      const sl  = el(`hand-f${i}`);
-      const val = el(`hand-f${i}-val`);
+function _updateHandState(panelId, s) {
+  _maybeSet(el(panelId + "-hand-enabled"), s.is_enabled ? "已使能" : "未使能");
+  _maybeSet(el(panelId + "-hand-force"), fmt(s.grip_force_n, 1));
+  if (s.finger_positions) {
+    s.finger_positions.forEach((pos, i) => {
+      const sl = el(panelId + `-hand-f${i}`);
+      const val = el(panelId + `-hand-f${i}-val`);
       if (sl && !sl.matches(":active")) sl.value = pos;
       if (val) val.textContent = fmt(pos * 100, 0) + "%";
     });
   }
+}
 
-  el("last-update").textContent = "最后更新：" + new Date().toLocaleTimeString();
-});
+// ═══════════════════════════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// ── emergency stop ────────────────────────────────────────────────────────────
-el("btn-estop").addEventListener("click", () => {
-  socket.emit("ugv_estop");
-  socket.emit("lift_stop");
-  socket.emit("arm_stop");
-  socket.emit("hand_stop");
-});
+function _maybeSet(el, value) {
+  if (el) el.textContent = value;
+}
 
-// ── UGV ───────────────────────────────────────────────────────────────────────
-const slLinear  = el("sl-linear");
-const slAngular = el("sl-angular");
-const lblLinear  = el("lbl-linear");
-const lblAngular = el("lbl-angular");
+function _togglePanelLog(logPanel, btn, label) {
+  if (logPanel.style.display === "block") {
+    logPanel.style.display = "none";
+    btn.innerHTML = label + " ▾";
+  } else {
+    logPanel.style.display = "block";
+    btn.innerHTML = label + " ▴";
+  }
+}
 
-slLinear.addEventListener("input",  () => { lblLinear.textContent  = slLinear.value; });
-slAngular.addEventListener("input", () => { lblAngular.textContent = slAngular.value; });
+function _updateLogPanel(panelId, logs) {
+  const panel = el(panelId);
+  if (!panel || !logs || logs.length === 0) return;
+  const lastTs = parseFloat(panel.dataset.lastTs || "0");
+  const latest = logs[logs.length - 1];
+  if (latest.ts <= lastTs) return;
+  panel.dataset.lastTs = latest.ts;
+  panel.innerHTML = logs.map(e => {
+    const t = new Date(e.ts * 1000).toLocaleTimeString();
+    const cls = e.level === "error" ? "#f44336" : e.level === "warn" ? "#ff9800" : "#999";
+    return `<div style="color:${cls};line-height:1.6">${t} [${e.level.toUpperCase()}] ${e.msg}</div>`;
+  }).join("");
+  panel.scrollTop = panel.scrollHeight;
+}
 
-document.querySelectorAll(".dpad-btn").forEach((btn) => {
-  let interval = null;
-  const start = () => {
-    const send = () => {
-      const l = parseFloat(btn.dataset.l) * parseFloat(slLinear.value);
-      const a = parseFloat(btn.dataset.a) * parseFloat(slAngular.value);
-      socket.emit("ugv_velocity", { linear: l, angular: a });
-    };
-    send();  // immediate first frame
-    interval = setInterval(send, 100);  // 10 Hz while held
-  };
-  const stop = () => {
-    if (interval) { clearInterval(interval); interval = null; }
-    socket.emit("ugv_stop");
-  };
-  btn.addEventListener("mousedown",  start);
-  btn.addEventListener("touchstart", start, { passive: true });
-  btn.addEventListener("mouseup",    stop);
-  btn.addEventListener("mouseleave", stop);
-  btn.addEventListener("touchend",   stop);
-});
+function _checkEmptyState() {
+  const canvas = el("canvas");
+  if (!canvas) return;
+  const hasPanels = canvas.querySelectorAll(".panel").length > 0;
+  let emptyEl = canvas.querySelector(".canvas-empty");
+  if (!hasPanels && !emptyEl) {
+    emptyEl = document.createElement("div");
+    emptyEl.className = "canvas-empty";
+    emptyEl.innerHTML = "<span>点击右侧硬件模块打开控制面板</span>";
+    canvas.appendChild(emptyEl);
+  } else if (hasPanels && emptyEl) {
+    emptyEl.remove();
+  }
+}
 
-// UGV enable / reset
-const btnUgvEnable = el("btn-ugv-enable");
-const btnUgvReset  = el("btn-ugv-reset");
-if (btnUgvEnable) btnUgvEnable.addEventListener("click", () => socket.emit("ugv_enable"));
-if (btnUgvReset)  btnUgvReset.addEventListener("click",  () => socket.emit("ugv_reset"));
+// ═══════════════════════════════════════════════════════════════════════════════
+// Emergency Stop
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// Restart CAN (admin only on server side)
-const btnRestartCan = el("btn-restart-can");
-if (btnRestartCan) {
-  btnRestartCan.addEventListener("click", () => {
-    btnRestartCan.disabled = true;
-    btnRestartCan.textContent = "重启中...";
-    socket.emit("restart_can");
+const btnEstop = el("btn-estop");
+if (btnEstop) {
+  btnEstop.addEventListener("click", () => {
+    if (ACTIVE_MODULES.includes("ugv"))  socket.emit("ugv_estop");
+    if (ACTIVE_MODULES.includes("lift")) socket.emit("lift_stop");
+    if (ACTIVE_MODULES.includes("arm"))  socket.emit("arm_stop");
+    if (ACTIVE_MODULES.includes("hand")) socket.emit("hand_stop");
+    if (ACTIVE_MODULES.includes("motor")) socket.emit("motor_stop");
   });
 }
+
+// ── Power buttons ────────────────────────────────────────────────────────────
+
+let _powerAction = null;
+const powerOverlay = el("power-overlay");
+const powerTitle = el("power-title");
+const powerMsg = el("power-msg");
+const btnPowerConfirm = el("btn-power-confirm");
+const btnPowerCancel = el("btn-power-cancel");
+const btnPowerCancel2 = el("btn-power-cancel2");
+
+function _showPowerConfirm(action) {
+  _powerAction = action;
+  if (action === "reboot") {
+    powerTitle.textContent = "确认重启";
+    powerMsg.textContent = "确定要重启系统吗？重启后请等待约 30 秒重新连接。";
+    btnPowerConfirm.style.background = "#f0c040";
+    btnPowerConfirm.style.color = "#1a1a1a";
+  } else {
+    powerTitle.textContent = "确认关机";
+    powerMsg.textContent = "确定要关闭系统吗？关机后需手动上电才能恢复。";
+    btnPowerConfirm.style.background = "var(--danger)";
+    btnPowerConfirm.style.color = "#fff";
+  }
+  powerOverlay.style.display = "flex";
+}
+function _hidePowerConfirm() {
+  powerOverlay.style.display = "none";
+  _powerAction = null;
+}
+
+const btnReboot = el("btn-reboot");
+if (btnReboot) btnReboot.addEventListener("click", () => _showPowerConfirm("reboot"));
+const btnShutdown = el("btn-shutdown");
+if (btnShutdown) btnShutdown.addEventListener("click", () => _showPowerConfirm("shutdown"));
+if (btnPowerCancel) btnPowerCancel.addEventListener("click", _hidePowerConfirm);
+if (btnPowerCancel2) btnPowerCancel2.addEventListener("click", _hidePowerConfirm);
+if (btnPowerConfirm) {
+  btnPowerConfirm.addEventListener("click", () => {
+    if (_powerAction) {
+      socket.emit("system_power", { action: _powerAction });
+      _hidePowerConfirm();
+      // Show brief feedback — the page may close before response arrives
+      setTimeout(() => alert("命令已发送，系统即将" + (_powerAction === "reboot" ? "重启" : "关机") + "。"), 200);
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Layout Selector Events
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const layoutSel = el("layout-selector");
+if (layoutSel) {
+  layoutSel.addEventListener("change", () => {
+    const name = layoutSel.value;
+    if (name) LayoutManager.load(name);
+  });
+}
+
+const btnSave = el("btn-layout-save");
+if (btnSave) {
+  btnSave.addEventListener("click", () => {
+    const name = prompt("布局名称：", "默认布局");
+    if (name) LayoutManager.save(name.trim());
+  });
+}
+
+const btnDelete = el("btn-layout-delete");
+if (btnDelete) {
+  btnDelete.addEventListener("click", () => {
+    const sel = el("layout-selector");
+    if (sel && sel.value) LayoutManager.delete(sel.value);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// lift_limits event (from server on set_zero/set_limits)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+socket.on("lift_limits", (data) => {
+  _maybeSet(el("lift-limit-min"), data.min_mm?.toFixed(1));
+  _maybeSet(el("lift-limit-max"), data.max_mm?.toFixed(1));
+  _maybeSet(el("lift-zero-offset"), data.zero_offset_mm?.toFixed(1));
+  const inMin = el("lift-min-mm");
+  const inMax = el("lift-max-mm");
+  if (inMin) inMin.value = data.min_mm;
+  if (inMax) inMax.value = data.max_mm;
+  // Update presets in all open lift panels
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module === "lift") _rebuildPresetsFor(panelId, data.min_mm, data.max_mm);
+  });
+});
+
+// restart_can result
 socket.on("restart_can_result", (r) => {
-  const btn = el("btn-restart-can");
-  if (btn) { btn.disabled = false; btn.textContent = r.ok ? "CAN 已重启" : "重启 CAN"; }
+  PanelManager._panels.forEach((p, panelId) => {
+    const btn = el(panelId + "-restart-can");
+    if (btn && p.module === "ugv") { btn.disabled = false; btn.textContent = r.ok ? "CAN 已重启" : "重启 CAN"; }
+  });
   if (!r.ok) alert(r.msg || "重启失败");
 });
 
-// UGV log panel toggle
-const btnToggleUgvLog = el("btn-toggle-ugv-log");
-if (btnToggleUgvLog) {
-  btnToggleUgvLog.addEventListener("click", () => {
-    const panel = el("ugv-log-panel");
-    if (panel.style.display === "none") {
-      panel.style.display = "block";
-      btnToggleUgvLog.innerHTML = "运行日志 &#9650;";
-    } else {
-      panel.style.display = "none";
-      btnToggleUgvLog.innerHTML = "运行日志 &#9660;";
-    }
-  });
-}
+// ═══════════════════════════════════════════════════════════════════════════════
+// Settings Modal (admin only)
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Lift ──────────────────────────────────────────────────────────────────────
-let _lastPresetKey = "";
-function _rebuildPresets(minMm, maxMm) {
-  const key = `${minMm}:${maxMm}`;
-  if (key === _lastPresetKey) return;
-  _lastPresetKey = key;
-  const container = el("lift-presets");
-  container.innerHTML = "";
-  const range = maxMm - minMm;
-  [0, 0.25, 0.5, 0.75, 1.0].forEach((f) => {
-    const h   = Math.round(minMm + range * f);
-    const btn = document.createElement("button");
-    btn.className = "btn-preset" + (ROLE === "viewer" ? " ctrl" : "");
-    btn.dataset.h = h;
-    btn.textContent = `${h} mm`;
-    if (ROLE === "viewer") { btn.disabled = true; }
-    else {
-      btn.addEventListener("click", () => {
-        el("lift-target").value = h;
-        socket.emit("lift_move", { height_mm: h, speed_mm_s: parseFloat(el("lift-speed").value) });
-      });
-    }
-    container.appendChild(btn);
-  });
-}
-_rebuildPresets(0, 500);
-
-el("btn-lift-move").addEventListener("click", () => {
-  socket.emit("lift_move", {
-    height_mm:  parseFloat(el("lift-target").value),
-    speed_mm_s: parseFloat(el("lift-speed").value),
-  });
-});
-el("btn-lift-stop").addEventListener("click",  () => socket.emit("lift_stop"));
-el("btn-lift-home").addEventListener("click",  () => {
-  socket.emit("lift_move", { height_mm: 0.0, speed_mm_s: parseFloat(el("lift-speed").value) });
-});
-el("btn-lift-reset").addEventListener("click", () => socket.emit("lift_reset_fault"));
-
-// Lift log panel toggle
-const btnToggleLog = el("btn-toggle-lift-log");
-if (btnToggleLog) {
-  btnToggleLog.addEventListener("click", () => {
-    const panel = el("lift-log-panel");
-    if (panel.style.display === "none") {
-      panel.style.display = "block";
-      btnToggleLog.innerHTML = "运行日志 &#9650;";
-    } else {
-      panel.style.display = "none";
-      btnToggleLog.innerHTML = "运行日志 &#9660;";
-    }
-  });
-}
-
-// Server confirms updated limits
-socket.on("lift_limits", (data) => {
-  const lmin = el("lift-limit-min");
-  const lmax = el("lift-limit-max");
-  const loff = el("lift-zero-offset");
-  const inMin = el("lift-min-mm");
-  const inMax = el("lift-max-mm");
-  if (lmin) lmin.textContent = data.min_mm.toFixed(1);
-  if (lmax) lmax.textContent = data.max_mm.toFixed(1);
-  if (loff) loff.textContent = data.zero_offset_mm.toFixed(1);
-  if (inMin) inMin.value = data.min_mm;
-  if (inMax) inMax.value = data.max_mm;
-  _rebuildPresets(data.min_mm, data.max_mm);
-});
-
-// ── Arm — build joint sliders ─────────────────────────────────────────────────
-const ARM_JOINTS = ["J1", "J2", "J3", "J4", "J5", "J6"];
-const armGrid = el("arm-joints");
-ARM_JOINTS.forEach((name, i) => {
-  const row = document.createElement("div");
-  row.className = "joint-row";
-  row.innerHTML = `
-    <label>${name}</label>
-    <input type="range" id="arm-j${i}" min="-180" max="180" step="1" value="0" />
-    <span class="val" id="arm-j${i}-val">0.0°</span>
-  `;
-  armGrid.appendChild(row);
-  row.querySelector("input").addEventListener("input", (e) => {
-    el(`arm-j${i}-val`).textContent = parseFloat(e.target.value).toFixed(1) + "°";
-  });
-});
-el("btn-arm-send").addEventListener("click", () => {
-  const angles = ARM_JOINTS.map((_, i) => parseFloat(el(`arm-j${i}`).value));
-  socket.emit("arm_move_joints", { angles, speed_pct: 20 });
-});
-el("btn-arm-home").addEventListener("click", () => socket.emit("arm_home"));
-el("btn-arm-stop").addEventListener("click", () => socket.emit("arm_stop"));
-
-// ── Hand — build finger sliders ───────────────────────────────────────────────
-const FINGER_NAMES = ["拇指", "食指", "中指", "无名指", "小指"];
-const handGrid = el("hand-fingers");
-FINGER_NAMES.forEach((name, i) => {
-  const row = document.createElement("div");
-  row.className = "finger-row";
-  row.innerHTML = `
-    <label>${name}</label>
-    <input type="range" id="hand-f${i}" min="0" max="1" step="0.01" value="0" />
-    <span class="val" id="hand-f${i}-val">0%</span>
-  `;
-  handGrid.appendChild(row);
-  row.querySelector("input").addEventListener("input", (e) => {
-    el(`hand-f${i}-val`).textContent = Math.round(parseFloat(e.target.value) * 100) + "%";
-  });
-});
-el("btn-hand-open").addEventListener("click",  () => socket.emit("hand_open"));
-el("btn-hand-close").addEventListener("click", () => socket.emit("hand_close"));
-el("btn-hand-pinch").addEventListener("click", () => socket.emit("hand_pinch"));
-el("btn-hand-send").addEventListener("click",  () => {
-  const positions = FINGER_NAMES.map((_, i) => parseFloat(el(`hand-f${i}`).value));
-  socket.emit("hand_set_fingers", { positions, speed_pct: 50 });
-});
-
-// ── Settings Modal (admin only) ───────────────────────────────────────────────
 if (ROLE === "admin") {
-  const overlay = el("settings-overlay");
+  (function _initSettings() {
+    const overlay = el("settings-overlay");
+    if (!overlay) return;
 
-  el("btn-settings").addEventListener("click", () => {
-    overlay.style.display = "flex";
-    socket.emit("admin_get_users");
-    // load current camera timeout
-    const inp = el("camera-timeout");
-    if (inp) socket.emit("settings_get");
-  });
+    el("btn-settings")?.addEventListener("click", () => {
+      overlay.style.display = "flex";
+      socket.emit("admin_get_users");
+      socket.emit("settings_get");
+    });
+    el("btn-settings-close")?.addEventListener("click", () => { overlay.style.display = "none"; });
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.style.display = "none"; });
 
-  el("btn-settings-close").addEventListener("click", () => {
-    overlay.style.display = "none";
-  });
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) overlay.style.display = "none";
-  });
-
-  // Lift zero & limits (inside modal)
-  el("btn-lift-set-zero").addEventListener("click", () => socket.emit("lift_set_zero"));
-  el("btn-lift-set-limits").addEventListener("click", () => {
-    const minVal = parseFloat(el("lift-min-mm").value);
-    const maxVal = parseFloat(el("lift-max-mm").value);
-    if (isNaN(minVal) || isNaN(maxVal) || minVal >= maxVal) {
-      alert("最小高度必须小于最大高度"); return;
-    }
-    socket.emit("lift_set_limits", { min_mm: minVal, max_mm: maxVal });
-  });
-
-  // Camera timeout
-  el("btn-save-camera-timeout").addEventListener("click", () => {
-    const val = parseInt(el("camera-timeout").value, 10);
-    if (isNaN(val) || val < 1) { alert("请输入有效的分钟数"); return; }
-    socket.emit("settings_set", { key: "camera_timeout_min", value: val });
-  });
-  socket.on("settings_ack", (data) => {
-    if (data.key === "camera_timeout_min") {
-      const inp = el("camera-timeout");
-      if (inp) inp.value = data.value;
-    }
-  });
-
-  // User management table
-  socket.on("admin_users", (users) => {
-    const tbody = el("user-table-body");
-    if (!tbody) return;
-    tbody.innerHTML = "";
-    users.forEach((u) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${u.username}</td>
-        <td>
-          <select class="role-select" data-id="${u.id}">
-            <option value="viewer"   ${u.role === "viewer"   ? "selected" : ""}>观察员</option>
-            <option value="operator" ${u.role === "operator" ? "selected" : ""}>操作员</option>
-            <option value="admin"    ${u.role === "admin"    ? "selected" : ""}>管理员</option>
-          </select>
-        </td>
-        <td><span class="badge ${u.status === 'active' ? 'active' : 'pending'}">${u.status === 'active' ? '已激活' : '待审批'}</span></td>
-        <td class="user-actions">
-          ${u.status === 'pending'
-            ? `<button class="btn-primary btn-sm btn-approve" data-id="${u.id}">批准</button>`
-            : ""}
-          <button class="btn-secondary btn-sm btn-delete" data-id="${u.id}">删除</button>
-        </td>
-      `;
-      tbody.appendChild(tr);
+    el("btn-lift-set-zero")?.addEventListener("click", () => socket.emit("lift_set_zero"));
+    el("btn-lift-set-limits")?.addEventListener("click", () => {
+      const minVal = parseFloat(el("lift-min-mm")?.value);
+      const maxVal = parseFloat(el("lift-max-mm")?.value);
+      if (isNaN(minVal) || isNaN(maxVal) || minVal >= maxVal) { alert("最小高度必须小于最大高度"); return; }
+      socket.emit("lift_set_limits", { min_mm: minVal, max_mm: maxVal });
+    });
+    el("btn-save-camera-timeout")?.addEventListener("click", () => {
+      const val = parseInt(el("camera-timeout")?.value, 10);
+      if (isNaN(val) || val < 1) { alert("请输入有效的分钟数"); return; }
+      socket.emit("settings_set", { key: "camera_timeout_min", value: val });
     });
 
-    // Role change
-    tbody.querySelectorAll(".role-select").forEach((sel) => {
-      sel.addEventListener("change", () => {
-        socket.emit("admin_update_user", { id: parseInt(sel.dataset.id), role: sel.value });
+    socket.on("settings_data", (data) => {
+      if (data.camera_timeout_min) {
+        const inp = el("camera-timeout"); if (inp) inp.value = data.camera_timeout_min;
+      }
+    });
+    socket.on("settings_ack", (data) => {
+      if (data.key === "camera_timeout_min") {
+        const inp = el("camera-timeout"); if (inp) inp.value = data.value;
+      }
+    });
+
+    // User management
+    socket.on("admin_users", (users) => {
+      const tbody = el("user-table-body"); if (!tbody) return;
+      tbody.innerHTML = "";
+      users.forEach((u) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${u.username}</td>
+          <td><select class="role-select" data-id="${u.id}">
+            <option value="viewer" ${u.role==="viewer"?"selected":""}>观察员</option>
+            <option value="operator" ${u.role==="operator"?"selected":""}>操作员</option>
+            <option value="admin" ${u.role==="admin"?"selected":""}>管理员</option>
+          </select></td>
+          <td><span class="badge ${u.status==='active'?'active':'pending'}">${u.status==='active'?'已激活':'待审批'}</span></td>
+          <td class="user-actions">
+            ${u.status==='pending'?`<button class="btn-primary btn-sm btn-approve" data-id="${u.id}">批准</button>`:""}
+            <button class="btn-secondary btn-sm btn-delete" data-id="${u.id}">删除</button>
+          </td>`;
+        tbody.appendChild(tr);
+      });
+      tbody.querySelectorAll(".role-select").forEach((s) => {
+        s.addEventListener("change", () => socket.emit("admin_update_user", {id:parseInt(s.dataset.id),role:s.value}));
+      });
+      tbody.querySelectorAll(".btn-approve").forEach((b) => {
+        b.addEventListener("click", () => socket.emit("admin_update_user", {id:parseInt(b.dataset.id),status:"active"}));
+      });
+      tbody.querySelectorAll(".btn-delete").forEach((b) => {
+        b.addEventListener("click", () => { if(confirm("确认删除该用户？")) socket.emit("admin_delete_user",{id:parseInt(b.dataset.id)}); });
       });
     });
-    // Approve
-    tbody.querySelectorAll(".btn-approve").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        socket.emit("admin_update_user", { id: parseInt(btn.dataset.id), status: "active" });
-      });
-    });
-    // Delete
-    tbody.querySelectorAll(".btn-delete").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        if (confirm("确认删除该用户？")) {
-          socket.emit("admin_delete_user", { id: parseInt(btn.dataset.id) });
-        }
-      });
-    });
-  });
+    socket.on("error", (data) => alert(data.msg));
+  })();
+}
 
-  // Error feedback
-  socket.on("error", (data) => alert(data.msg));
+// ═══════════════════════════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════════════════════════
+
+LayoutManager.init();
+_checkEmptyState();
+
+// Auto-open panels from last layout (optional — restore last-saved or use a default)
+const lastLayout = LayoutManager._layouts["_auto_restore"];
+if (lastLayout && lastLayout.panels && lastLayout.panels.length > 0) {
+  PanelManager.applyLayout(lastLayout);
+  _renderSidebar();
 }

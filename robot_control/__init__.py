@@ -1,15 +1,15 @@
-"""robot_control — top-level package."""
+"""robot_control — config-driven robot control system.
 
-from .robot import Robot, RobotConfig, RobotState
-from .ugv   import UGVController,  UGVState
-from .lift  import LiftController, LiftState
-from .arm   import ArmController,  ArmState
-from .hand  import HandController, HandState
+Add or remove hardware modules by editing the config dict in server.py.
+Each module lives in its own file and conforms to the RobotModule interface.
+"""
+
+from .robot import Robot, register_module
+from .module_base import RobotModule, EventHandler
 
 __all__ = [
-    "Robot", "RobotConfig", "RobotState",
-    "UGVController", "UGVState",
-    "LiftController", "LiftState",
-    "ArmController",  "ArmState",
-    "HandController", "HandState",
+    "Robot",
+    "RobotModule",
+    "EventHandler",
+    "register_module",
 ]

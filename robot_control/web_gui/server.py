@@ -1,7 +1,7 @@
 """Web GUI server — Flask + Flask-SocketIO.
 
-Exposes a browser-based control panel for all robot subsystems.
-Real-time state is pushed to the browser via WebSocket every 200 ms.
+Exposes a browser-based control panel for robot subsystems.
+Hardware modules are discovered from Robot config — the GUI adapts automatically.
 
 Run:
     python robot_control/web_gui/server.py
@@ -14,13 +14,12 @@ import sys
 import subprocess
 import threading
 import time
-from dataclasses import asdict
 
 from flask import Flask, render_template, Response, request, session, redirect, url_for
 from flask_socketio import SocketIO, emit
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from robot_control.robot import Robot, RobotConfig
+from robot_control.robot import Robot
 
 # auth module lives alongside this file
 sys.path.insert(0, os.path.dirname(__file__))
@@ -51,13 +50,9 @@ def _touch_activity():
 ROLE_LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
 
 def _get_session_user():
-    """Return active user Row from session, or None.
-    Enforces single-session: rejects stale sessions whose token was overwritten.
-    """
     return auth.get_current_user()
 
 def _require_role(min_role: str) -> bool:
-    """Emit error and return False if current user lacks the required role."""
     user = _get_session_user()
     if not user:
         emit("error", {"msg": "请先登录"})
@@ -68,112 +63,17 @@ def _require_role(min_role: str) -> bool:
     return True
 
 
-# ── Camera stream broadcaster ─────────────────────────────────────────────────
+# ── Camera stream endpoint (uses CameraModule if loaded) ──────────────────────
 
-CAMERA_DEVICE = "/dev/video0"
-
-class _CameraBroadcaster:
-    def __init__(self):
-        self._lock    = threading.Lock()
-        self._clients = {}
-        self._frame   = None
-        self._thread  = None
-        self._running = False
-
-    def _fetch_loop(self):
-        cmd = [
-            "ffmpeg", "-fflags", "nobuffer",
-            "-f", "v4l2", "-input_format", "mjpeg",
-            "-framerate", "30", "-video_size", "1280x720",
-            "-i", CAMERA_DEVICE,
-            # Output 1: MJPEG pipe → /stream (browser <img>)
-            "-vf", "fps=15",
-            "-vcodec", "mjpeg", "-q:v", "5",
-            "-f", "image2pipe", "pipe:1",
-            # Output 2: H.264 RTMP → SRS → WebRTC
-            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-            "-pix_fmt", "yuv420p",
-            "-an",
-            "-f", "flv", "rtmp://localhost/live/cam",
-        ]
-        while self._running:
-            proc = None
-            try:
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                log.info("[Camera] ffmpeg started (pid=%d)", proc.pid)
-                buf = b""
-                frame_n = 0
-                while self._running:
-                    chunk = proc.stdout.read(4096)
-                    if not chunk:
-                        break
-                    buf += chunk
-                    while True:
-                        s = buf.find(b"\xff\xd8")
-                        e = buf.find(b"\xff\xd9", s + 2) if s != -1 else -1
-                        if s == -1 or e == -1:
-                            break
-                        frame = buf[s:e + 2]
-                        buf   = buf[e + 2:]
-                        msg   = (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-                                 + frame + b"\r\n")
-                        with self._lock:
-                            self._frame = msg
-                            frame_n += 1
-                            if frame_n % 150 == 1:   # log every ~10 s at 15 fps
-                                log.info("[Camera] frame #%d (%d bytes), %d client(s)",
-                                         frame_n, len(frame), len(self._clients))
-                            for q in self._clients.values():
-                                q.append(msg)
-            except Exception as exc:
-                log.debug("[Camera] ffmpeg error: %s — retrying in 2 s", exc)
-            finally:
-                if proc:
-                    proc.kill()
-                    proc.wait()
-            if self._running:
-                time.sleep(2)
-
-    def _ensure_running(self):
-        with self._lock:
-            if self._thread is None or not self._thread.is_alive():
-                self._running = True
-                self._thread  = threading.Thread(
-                    target=self._fetch_loop, daemon=True, name="camera-fetch"
-                )
-                self._thread.start()
-
-    def subscribe(self):
-        self._ensure_running()
-        q = []
-        with self._lock:
-            if self._frame:
-                q.append(self._frame)
-            self._clients[id(q)] = q
-        return q
-
-    def unsubscribe(self, q):
-        with self._lock:
-            self._clients.pop(id(q), None)
-
-    def stop(self):
-        """Stop ffmpeg; will auto-restart on next subscribe()."""
-        with self._lock:
-            self._running = False
-            self._frame   = None
-            self._thread  = None
-
-    def client_count(self):
-        with self._lock:
-            return len(self._clients)
-
-
-_broadcaster = _CameraBroadcaster()
+def _camera_module():
+    """Return the camera module instance, or None."""
+    if robot:
+        return robot.modules.get("camera")
+    return None
 
 
 def _gen_client_stream(q):
-    """Yield frames from queue. Bails out after 5 s if no frame arrives,
-    so the browser <img> tag doesn't spin forever when the camera is gone."""
+    """Yield frames from queue. Bails out after 5 s if no frame arrives."""
     deadline = time.time() + 5
     count = 0
     try:
@@ -181,7 +81,7 @@ def _gen_client_stream(q):
             if q:
                 yield q.pop(0)
                 count += 1
-                deadline = time.time() + 5  # reset countdown on each frame
+                deadline = time.time() + 5
             elif time.time() > deadline:
                 log.info("[Camera] /stream: timeout — sent %d frames", count)
                 return
@@ -192,38 +92,70 @@ def _gen_client_stream(q):
         raise
 
 
+@app.route("/stream")
+@auth.login_required
+def camera_stream():
+    cam = _camera_module()
+    if not cam:
+        return Response("Camera module not loaded", status=503)
+    q = cam.subscribe()
+    log.info("[Camera] /stream: client subscribed (clients=%d)", cam.client_count())
+    def generate():
+        try:
+            yield from _gen_client_stream(q)
+        finally:
+            cam.unsubscribe(q)
+            log.info("[Camera] /stream: client unsubscribed (clients=%d)", cam.client_count())
+    return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+# ── SRS WebRTC API proxy ────────────────────────────────────────────────────
+# Browser connects to the same origin; Flask forwards internally to SRS.
+# This avoids exposing SRS ports directly and works through FRP tunnels.
+
+import urllib.request as _urllib_req
+
+_SRS_API = "http://127.0.0.1:1985"
+
+
+@app.route("/srs-api/", defaults={"subpath": ""}, methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+@app.route("/srs-api/<path:subpath>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+def _srs_proxy(subpath):
+    if robot is None and request.method != "OPTIONS":
+        return {"code": -1, "msg": "robot not ready"}, 503
+    target = f"{_SRS_API}/{subpath}"
+    if request.query_string:
+        target += "?" + request.query_string.decode()
+    body = request.get_data() or None
+    headers = {"Content-Type": request.content_type or "application/json"}
+    try:
+        req = _urllib_req.Request(target, data=body, headers=headers, method=request.method)
+        with _urllib_req.urlopen(req, timeout=5) as resp:
+            return resp.read(), resp.status, {"Content-Type": resp.headers.get("Content-Type", "application/json")}
+    except Exception as e:
+        log.warning("[SRS proxy] error: %s", e)
+        return {"code": -1, "msg": str(e)}, 502
+
+
 def _camera_watchdog():
-    """Stop ffmpeg when no subscribers AND no activity for N minutes."""
+    """Stop camera when no subscribers AND no activity for N minutes."""
     while True:
         time.sleep(30)
         try:
+            cam = _camera_module()
+            if not cam:
+                continue
             timeout_sec = float(auth.get_setting("camera_timeout_min", "5")) * 60
-            no_subs     = _broadcaster.client_count() == 0
+            no_subs = cam.client_count() == 0
             no_activity = (time.time() - _last_activity) > timeout_sec
             if no_subs and no_activity:
                 log.info("[Camera] Watchdog: stopping ffmpeg (idle)")
-                _broadcaster.stop()
+                cam.stop()
         except Exception as e:
             log.debug("[Camera] Watchdog error: %s", e)
 
 
 # ── HTTP routes ───────────────────────────────────────────────────────────────
-
-@app.route("/stream")
-@auth.login_required
-def camera_stream():
-    q = _broadcaster.subscribe()
-    log.info("[Camera] /stream: client subscribed (clients=%d)",
-             _broadcaster.client_count())
-    def generate():
-        try:
-            yield from _gen_client_stream(q)
-        finally:
-            _broadcaster.unsubscribe(q)
-            log.info("[Camera] /stream: client unsubscribed (clients=%d)",
-                     _broadcaster.client_count())
-    return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
-
 
 @app.route("/")
 @auth.login_required
@@ -293,7 +225,39 @@ def logout():
     return redirect(url_for("login"))
 
 
-# ── SocketIO events — client → server ─────────────────────────────────────────
+# ── SocketIO — module handler registration ────────────────────────────────────
+
+def _register_module_handlers(robot: Robot):
+    """Iterate over loaded modules and register each one's SocketIO handlers."""
+    for name, module in robot.modules.items():
+        handlers = module.get_socketio_handlers()
+        if not handlers:
+            continue
+
+        for event, handler_fn in handlers.items():
+            # Wrap so emit is passed through
+            def make_listener(fn=handler_fn):
+                def listener(data=None):
+                    _touch_activity()
+                    fn(data or {}, emit)
+                return listener
+
+            wrapped = make_listener()
+            # Attach role check: all module events require at least "operator"
+            socketio.on_event(event, _with_role("operator", wrapped))
+        log.info("[GUI] Registered %d handler(s) for module '%s'", len(handlers), name)
+
+
+def _with_role(min_role: str, handler):
+    """Wrap a handler with role-based access control."""
+    def wrapper(data=None):
+        if _require_role(min_role):
+            return handler(data)
+    wrapper.__name__ = handler.__name__
+    return wrapper
+
+
+# ── SocketIO events — lifecycle ───────────────────────────────────────────────
 
 @socketio.on("connect")
 def on_connect():
@@ -303,7 +267,8 @@ def on_connect():
         emit("redirect", {"url": "/login"})
         return
     log.info("[GUI] Client connected: %s (%s)", user["username"], user["role"])
-    emit("connected", {"status": "ok", "role": user["role"]})
+    emit("connected", {"status": "ok", "role": user["role"],
+                       "modules": robot.module_names if robot else []})
 
 
 @socketio.on("disconnect")
@@ -311,49 +276,7 @@ def on_disconnect():
     log.info("[GUI] Client disconnected")
 
 
-# UGV
-@socketio.on("ugv_velocity")
-def on_ugv_velocity(data):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.ugv:
-        robot.ugv.set_velocity(
-            float(data.get("linear", 0.0)),
-            float(data.get("angular", 0.0)),
-        )
-
-
-@socketio.on("ugv_stop")
-def on_ugv_stop(_data=None):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.ugv:
-        robot.ugv.stop_motion()
-
-
-@socketio.on("ugv_estop")
-def on_ugv_estop(_data=None):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot:
-        robot.emergency_stop()
-
-
-@socketio.on("ugv_enable")
-def on_ugv_enable(_data=None):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.ugv:
-        robot.ugv.enable()
-
-
-@socketio.on("ugv_reset")
-def on_ugv_reset(_data=None):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.ugv:
-        robot.ugv.reset()
-
+# ── SocketIO events — admin / settings ────────────────────────────────────────
 
 @socketio.on("restart_can")
 def on_restart_can(_data=None):
@@ -377,129 +300,16 @@ def on_restart_can(_data=None):
         log.error("[CAN] Restart failed: %s", e)
 
 
-# Lift
-@socketio.on("lift_move")
-def on_lift_move(data):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.lift:
-        robot.lift.move_to_async(
-            float(data.get("height_mm", 0.0)),
-            float(data.get("speed_mm_s", 10.0)),
-        )
+@socketio.on("settings_get")
+def on_settings_get(_data=None):
+    """Return all stored settings."""
+    keys = ("camera_timeout_min",)
+    result = {}
+    for key in keys:
+        result[key] = auth.get_setting(key, "")
+    emit("settings_data", result)
 
 
-@socketio.on("lift_stop")
-def on_lift_stop(_data=None):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.lift:
-        robot.lift.stop()
-
-
-@socketio.on("lift_home")
-def on_lift_home(data=None):
-    _touch_activity()
-    if not _require_role("operator"): return
-    strategy = (data or {}).get("strategy", "current_pos")
-    if robot and robot.lift:
-        threading.Thread(target=robot.lift.home, args=(strategy,), daemon=True).start()
-
-
-@socketio.on("lift_reset_fault")
-def on_lift_reset_fault(_data=None):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.lift:
-        robot.lift.reset_fault()
-
-
-@socketio.on("lift_set_zero")
-def on_lift_set_zero(_data=None):
-    _touch_activity()
-    if not _require_role("admin"): return
-    if robot and robot.lift:
-        robot.lift.set_zero()
-        emit("lift_limits", robot.lift.get_limits())
-
-
-@socketio.on("lift_set_limits")
-def on_lift_set_limits(data):
-    _touch_activity()
-    if not _require_role("admin"): return
-    if robot and robot.lift:
-        robot.lift.set_limits(
-            float(data.get("min_mm", 0.0)),
-            float(data.get("max_mm", 500.0)),
-        )
-        emit("lift_limits", robot.lift.get_limits())
-
-
-# Arm
-@socketio.on("arm_move_joints")
-def on_arm_move_joints(data):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.arm:
-        robot.arm.move_joints(
-            data.get("angles", [0.0] * 6),
-            float(data.get("speed_pct", 20.0)),
-        )
-
-
-@socketio.on("arm_home")
-def on_arm_home(_data=None):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.arm:
-        robot.arm.go_home()
-
-
-@socketio.on("arm_stop")
-def on_arm_stop(_data=None):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.arm:
-        robot.arm.stop()
-
-
-# Hand
-@socketio.on("hand_open")
-def on_hand_open(_data=None):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.hand:
-        robot.hand.open()
-
-
-@socketio.on("hand_close")
-def on_hand_close(_data=None):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.hand:
-        robot.hand.close()
-
-
-@socketio.on("hand_pinch")
-def on_hand_pinch(_data=None):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.hand:
-        robot.hand.pinch()
-
-
-@socketio.on("hand_set_fingers")
-def on_hand_set_fingers(data):
-    _touch_activity()
-    if not _require_role("operator"): return
-    if robot and robot.hand:
-        robot.hand.set_all_fingers(
-            data.get("positions", [0.0] * 5),
-            float(data.get("speed_pct", 50.0)),
-        )
-
-
-# Admin — settings
 @socketio.on("settings_set")
 def on_settings_set(data):
     _touch_activity()
@@ -511,7 +321,6 @@ def on_settings_set(data):
         emit("settings_ack", {"key": key, "value": value})
 
 
-# Admin — user management
 @socketio.on("admin_get_users")
 def on_admin_get_users(_data=None):
     if not _require_role("admin"): return
@@ -525,7 +334,6 @@ def on_admin_update_user(data):
     user_id = data.get("id")
     role    = data.get("role")
     status  = data.get("status")
-    # prevent admin from demoting themselves
     me = _get_session_user()
     if me and me["id"] == user_id and role and role != "admin":
         emit("error", {"msg": "不能修改自己的角色"}); return
@@ -546,6 +354,23 @@ def on_admin_delete_user(data):
     emit("admin_users", [dict(r) for r in rows])
 
 
+@socketio.on("system_power")
+def on_system_power(data):
+    if not _require_role("admin"): return
+    action = data.get("action", "")
+    if action not in ("reboot", "shutdown"):
+        emit("error", {"msg": f"未知操作: {action}"}); return
+    user = _get_session_user()
+    uid = user["id"] if user else "?"
+    log.warning("[System] %s requested by user id=%s", action, uid)
+    emit("system_power_result", {"action": action, "ok": True})
+    import subprocess
+    if action == "reboot":
+        subprocess.Popen(["systemctl", "reboot"])
+    else:
+        subprocess.Popen(["systemctl", "poweroff"])
+
+
 # ── state broadcast loop ──────────────────────────────────────────────────────
 
 def _state_broadcast_loop():
@@ -555,19 +380,13 @@ def _state_broadcast_loop():
         try:
             if robot:
                 state = robot.get_state()
-                payload = {
-                    "ugv":  asdict(state.ugv),
-                    "lift": asdict(state.lift),
-                    "arm":  asdict(state.arm),
-                    "hand": asdict(state.hand),
-                    "timestamp": state.timestamp,
-                }
-                socketio.emit("robot_state", payload)
+                socketio.emit("robot_state", state)
                 loop_count += 1
                 if loop_count % 300 == 0:   # every ~60 s
-                    h = payload["lift"].get("height_mm", "N/A")
+                    lift = state.get("lift", {})
                     log.info("[State] lift height=%.1f mm, drive_state=%s",
-                             h, payload["lift"].get("drive_state", "?"))
+                             lift.get("height_mm", float("nan")),
+                             lift.get("drive_state", "?"))
         except Exception as e:
             log.warning("[GUI] State broadcast error: %s", e)
         time.sleep(0.2)
@@ -585,16 +404,37 @@ def main():
 
     auth.init_db()
 
-    config = RobotConfig(
-        lift_home_strategy="current_pos",
-    )
+    # ── Module config ──────────────────────────────────────────────────────
+    # All hardware modules are enabled by default.  Each module gracefully
+    # degrades to stub/standby when its SDK or hardware is absent.
+    # To disable a module, set "enabled": false or remove the key.
+    #
+    # Robot configurations supported:
+    #   Pipe robot  → motor + camera + lift
+    #   Full robot  → ugv + arm + hand + camera + lift
+    config = {
+        "arm":    {"host": "192.168.56.101"},
+        "ugv":    {"host": "127.0.0.1", "port": 9100},
+        "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
+        "camera": {"device": "/dev/video0", "rtmp_url": "rtmp://localhost/live/cam"},
+        # 以下模块暂无硬件，需要时取消注释
+        # "hand":   {"protocol": "modbus", "port": None, "baudrate": 115200, "slave_id": 0x7E},
+        # "motor":  {},
+    }
+
     robot = Robot(config)
     robot.start()
+
+    # Register dynamic SocketIO handlers from loaded modules
+    _register_module_handlers(robot)
 
     threading.Thread(target=_state_broadcast_loop, daemon=True, name="state-broadcast").start()
     threading.Thread(target=_camera_watchdog,      daemon=True, name="camera-watchdog").start()
 
-    log.info("[GUI] Server starting at http://0.0.0.0:6080")
+    loaded = robot.module_names
+    log.info("[GUI] Server starting at http://0.0.0.0:6080 — modules: %s",
+             loaded if loaded else ["(none)"])
+
     try:
         socketio.run(app, host="0.0.0.0", port=6080, debug=False,
                      use_reloader=False, allow_unsafe_werkzeug=True)

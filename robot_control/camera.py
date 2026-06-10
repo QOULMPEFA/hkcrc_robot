@@ -1,0 +1,328 @@
+"""Camera module — USB camera with WebRTC (SRS RTMP) + MJPEG fallback.
+
+Auto-detects real video capture devices (skips codec-only nodes like cedrus).
+Monitors frame health and restarts ffmpeg on signal loss.  Cycles through
+available devices when the active one fails repeatedly.
+
+Streaming paths:
+  Primary:   /dev/videoN → ffmpeg (H.264) → RTMP → SRS → WebRTC → browser
+  Fallback:  /dev/videoN → ffmpeg (MJPEG) → pipe → /stream HTTP (MJPEG)
+"""
+
+import logging
+import subprocess
+import threading
+import time
+from typing import Any, Dict, List, Optional
+
+from robot_control.module_base import RobotModule
+
+log = logging.getLogger(__name__)
+
+# Max consecutive ffmpeg restarts before trying the next camera device.
+_MAX_RESTARTS = 3
+# Seconds without a frame before declaring signal loss.
+_FRAME_TIMEOUT = 5.0
+
+
+def _detect_cameras() -> List[str]:
+    """Return /dev/video paths that are real video capture devices.
+
+    Uses v4l2-ctl to filter out codec-only nodes (e.g. cedrus on Allwinner).
+    """
+    import os
+    devices = []
+    for i in range(4):  # check /dev/video0 .. /dev/video3
+        path = f"/dev/video{i}"
+        if not os.path.exists(path):
+            continue
+        try:
+            info = subprocess.run(
+                ["v4l2-ctl", "-d", path, "--info"],
+                capture_output=True, text=True, timeout=3,
+            )
+            # cedrus reports "Video Memory-to-Memory" — skip those.
+            if "Video Capture" in info.stdout:
+                devices.append(path)
+                continue
+            # v4l2-ctl succeeded but didn't report "Video Capture" —
+            # some cameras (e.g. Orbbec) return empty/atypical output.
+            # Fall through to sysfs check below.
+        except (FileNotFoundError, subprocess.SubprocessError):
+            pass  # v4l2-ctl missing or failed — fall through to sysfs
+
+        # Sysfs fallback: check driver name to filter codec nodes (cedrus).
+        try:
+            with open(f"/sys/class/video4linux/video{i}/name") as fh:
+                name = fh.read().strip()
+            if "cedrus" not in name.lower():
+                devices.append(path)
+            else:
+                log.info("[Camera] skip %s — driver=%s", path, name)
+        except OSError:
+            pass
+    return devices
+
+
+class CameraModule(RobotModule):
+    """USB camera — WebRTC primary, MJPEG fallback, auto device cycling."""
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        cfg = config or {}
+        self._device = cfg.get("device", "/dev/video0")
+        self._width = int(cfg.get("width", 1280))
+        self._height = int(cfg.get("height", 720))
+        self._fps = int(cfg.get("fps", 15))
+        self._rtmp_url = cfg.get("rtmp_url", "rtmp://localhost/live/cam")
+
+        self._lock = threading.Lock()
+        self._clients: Dict[int, list] = {}
+        self._frame: Optional[bytes] = None
+        self._last_frame_time = 0.0
+        self._ffmpeg_proc: Optional[subprocess.Popen] = None
+        self._running = False
+        self._restart_count = 0
+        self._device_idx = 0
+        self._available_devices: List[str] = []
+
+    # ── RobotModule metadata ─────────────────────────────────────────────
+
+    @property
+    def name(self) -> str:
+        return "camera"
+
+    @property
+    def display_name(self) -> str:
+        return "摄像头"
+
+    def get_state_schema(self) -> Dict[str, Any]:
+        return {
+            "connected": False,
+            "client_count": 0,
+            "frame_bytes": 0,
+            "device": self._device,
+            "signal": "unknown",
+        }
+
+    def get_socketio_handlers(self) -> Dict[str, callable]:
+        return {}
+
+    # ── lifecycle ───────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+
+        # Refresh device list on each start.
+        self._available_devices = _detect_cameras()
+        if not self._available_devices:
+            log.warning("[Camera] No video capture devices found! "
+                        "Camera module running in standby (waiting for USB camera). "
+                        "Check: lsusb, ls /dev/v4l/by-id/")
+            # Start a background re-scanner for hotplug detection.
+            t = threading.Thread(target=self._hotplug_watch, daemon=True, name="cam-hotplug")
+            t.start()
+            return
+        log.info("[Camera] devices found: %s", self._available_devices)
+
+        self._choose_active_device()
+        self._start_ffmpeg()
+
+        t = threading.Thread(target=self._frame_loop, daemon=True, name="cam-loop")
+        t.start()
+        log.info("[Camera] Module started — device=%s, %dx%d", self._device, self._width, self._height)
+
+    def _hotplug_watch(self) -> None:
+        """Periodically re-scan for USB cameras (hotplug detection)."""
+        while True:
+            time.sleep(10)
+            devices = _detect_cameras()
+            if devices:
+                log.info("[Camera] Hotplug detected: %s — restarting", devices)
+                self._available_devices = devices
+                self._device_idx = 0
+                self._choose_active_device()
+                self._running = True
+                self._start_ffmpeg()
+                t = threading.Thread(target=self._frame_loop, daemon=True, name="cam-loop")
+                t.start()
+                return  # Exit hotplug watch, normal frame loop takes over
+
+    def stop(self) -> None:
+        with self._lock:
+            self._running = False
+            self._frame = None
+            self._clients.clear()
+        self._kill_ffmpeg()
+        log.info("[Camera] Module stopped")
+
+    def emergency_stop(self) -> None:
+        self.stop()
+
+    # ── state ───────────────────────────────────────────────────────────
+
+    def get_state(self) -> Dict[str, Any]:
+        signal = "ok"
+        elapsed = time.time() - self._last_frame_time
+        if not self._running:
+            signal = "stopped"
+        elif self._last_frame_time == 0:
+            signal = "waiting"
+        elif elapsed > _FRAME_TIMEOUT * 2:
+            signal = "lost"
+        elif elapsed > _FRAME_TIMEOUT:
+            signal = "stale"
+
+        with self._lock:
+            return {
+                "connected": self._running and self._ffmpeg_proc is not None,
+                "client_count": len(self._clients),
+                "frame_bytes": len(self._frame) if self._frame else 0,
+                "device": self._device,
+                "signal": signal,
+            }
+
+    # ── subscriber API ──────────────────────────────────────────────────
+
+    def subscribe(self) -> list:
+        self._ensure_running()
+        q: list = []
+        with self._lock:
+            if self._frame:
+                q.append(self._frame)
+            self._clients[id(q)] = q
+        return q
+
+    def unsubscribe(self, q: list) -> None:
+        with self._lock:
+            self._clients.pop(id(q), None)
+
+    def client_count(self) -> int:
+        with self._lock:
+            return len(self._clients)
+
+    # ── internals: device selection ─────────────────────────────────────
+
+    def _choose_active_device(self) -> None:
+        if self._available_devices:
+            self._device = self._available_devices[self._device_idx % len(self._available_devices)]
+        log.info("[Camera] active device → %s", self._device)
+
+    def _cycle_device(self) -> None:
+        """Move to the next available camera device."""
+        self._restart_count = 0
+        if len(self._available_devices) <= 1:
+            # Only one device — just restart after a brief cooldown.
+            log.info("[Camera] single device — will retry %s after cooldown", self._device)
+            return
+        self._device_idx = (self._device_idx + 1) % len(self._available_devices)
+        self._choose_active_device()
+        log.warning("[Camera] cycled to next device: %s", self._device)
+
+    # ── internals: unified ffmpeg (MJPEG pipe + RTMP push) ──────────────
+
+    def _start_ffmpeg(self) -> None:
+        """Launch ffmpeg with dual output: MJPEG to pipe:1 + H.264 to RTMP.
+
+        Single device open avoids contention on USB cameras that don't
+        support concurrent access.
+        """
+        self._kill_ffmpeg()
+        cmd = [
+            "ffmpeg", "-fflags", "nobuffer",
+            "-f", "v4l2",
+            "-input_format", "mjpeg",
+            "-framerate", "30",
+            "-video_size", f"{self._width}x{self._height}",
+            "-i", self._device,
+            # Output 1: MJPEG passthrough → stdout (HTTP /stream)
+            "-c:v", "copy",
+            "-f", "image2pipe", "pipe:1",
+            # Output 2: H.264 → RTMP (SRS → WebRTC)
+            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+            "-pix_fmt", "yuv420p", "-g", "30", "-b:v", "1M",
+            "-an",
+            "-f", "flv", self._rtmp_url,
+        ]
+        try:
+            self._ffmpeg_proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            self._last_frame_time = time.time()
+            log.info("[Camera] ffmpeg started (pid=%d) on %s → pipe + RTMP",
+                     self._ffmpeg_proc.pid, self._device)
+        except Exception as exc:
+            log.error("[Camera] ffmpeg launch failed: %s", exc)
+            self._ffmpeg_proc = None
+
+    def _kill_ffmpeg(self) -> None:
+        if self._ffmpeg_proc:
+            try:
+                self._ffmpeg_proc.kill()
+                self._ffmpeg_proc.wait(timeout=3)
+            except Exception:
+                pass
+            self._ffmpeg_proc = None
+
+    def _frame_loop(self) -> None:
+        """Read MJPEG frames from ffmpeg stdout, broadcast, watch for signal loss."""
+        buf = b""
+        frame_n = 0
+        while self._running:
+            proc = self._ffmpeg_proc
+            if proc is None:
+                time.sleep(1)
+                continue
+            try:
+                chunk = proc.stdout.read(4096)
+            except Exception:
+                chunk = None
+
+            if not chunk:
+                if self._running:
+                    self._restart_count += 1
+                    log.warning("[Camera] ffmpeg exited (restart #%d)", self._restart_count)
+                    if self._restart_count >= _MAX_RESTARTS:
+                        self._cycle_device()
+                    time.sleep(1)
+                    self._start_ffmpeg()
+                    buf = b""
+                continue
+
+            buf += chunk
+            while True:
+                s = buf.find(b"\xff\xd8")
+                e = buf.find(b"\xff\xd9", s + 2) if s != -1 else -1
+                if s == -1 or e == -1:
+                    break
+                frame = buf[s:e + 2]
+                buf = buf[e + 2:]
+                frame_n += 1
+                msg = (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                       + frame + b"\r\n")
+                with self._lock:
+                    self._frame = msg
+                    self._last_frame_time = time.time()
+                    for q in self._clients.values():
+                        q.append(msg)
+                if frame_n % 150 == 1:
+                    log.info("[Camera] frame #%d (%d bytes), %d client(s)",
+                             frame_n, len(frame), self.client_count())
+
+            # Signal-loss detection
+            elapsed = time.time() - self._last_frame_time
+            if elapsed > _FRAME_TIMEOUT and self._last_frame_time > 0:
+                log.warning("[Camera] signal lost — %.1fs since last frame, restarting", elapsed)
+                self._restart_count += 1
+                if self._restart_count >= _MAX_RESTARTS:
+                    self._cycle_device()
+                self._start_ffmpeg()
+                buf = b""
+                frame_n = 0
+
+    # ── helpers ─────────────────────────────────────────────────────────
+
+    def _ensure_running(self) -> None:
+        with self._lock:
+            if self._ffmpeg_proc is None or self._ffmpeg_proc.poll() is not None:
+                self._start_ffmpeg()

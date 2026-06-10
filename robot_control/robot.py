@@ -1,174 +1,147 @@
-"""Top-level robot controller — assembles all subsystems.
+"""Generic robot controller — assembles hardware modules from config.
 
 Usage:
     from robot_control.robot import Robot
 
-    with Robot() as robot:
-        robot.ugv.set_velocity(0.5, 0.0)
-        robot.lift.move_to(200.0)
-        # arm and hand are stubs until SDKs are integrated
+    config = {
+        "lift":   {"enabled": True, "can_channel": "can0", "node_id": 1},
+        "camera": {"enabled": True, "device": "/dev/video0"},
+        # ugv, arm, hand are omitted → disabled
+    }
+
+    with Robot(config) as robot:
+        robot.modules["lift"].move_to(200.0)
+        state = robot.get_state()
+        robot.emergency_stop()
 """
 
 import logging
-import sys
-import os
 import time
-from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from robot_control.ugv  import UGVController,  UGVState
-from robot_control.lift import LiftController, LiftState
-from robot_control.arm  import ArmController,  ArmState
-from robot_control.hand import HandController, HandState
+from robot_control.module_base import RobotModule
 
 log = logging.getLogger(__name__)
 
-
-@dataclass
-class RobotConfig:
-    # UGV bridge
-    ugv_host: str  = "127.0.0.1"
-    ugv_port: int  = 9100
-
-    # Lift — CAN
-    lift_can_channel: str = "can0"
-    lift_node_id:     int = 1
-
-    # Arm — serial
-    arm_port:     str = "/dev/ttyUSB0"
-    arm_baudrate: int = 115200
-
-    # Hand — serial
-    hand_port:     str = "/dev/ttyUSB1"
-    hand_baudrate: int = 115200
-
-    # Lift homing strategy on startup
-    lift_home_strategy: str = "current_pos"   # "current_pos" | "limit_switch" | "mechanical"
+# Module name → (class, module_path) for lazy discovery
+_MODULE_REGISTRY: Dict[str, tuple] = {
+    "ugv":    ("robot_control.ugv",    "UGVController"),
+    "lift":   ("robot_control.lift",   "LiftController"),
+    "arm":    ("robot_control.arm",    "ArmController"),
+    "hand":   ("robot_control.hand",   "HandController"),
+    "camera": ("robot_control.camera", "CameraModule"),
+    "motor":  ("robot_control.motor",  "MotorController"),
+}
 
 
-@dataclass
-class RobotState:
-    ugv:  UGVState  = field(default_factory=UGVState)
-    lift: LiftState = field(default_factory=LiftState)
-    arm:  ArmState  = field(default_factory=ArmState)
-    hand: HandState = field(default_factory=HandState)
-    timestamp: float = field(default_factory=time.time)
+def register_module(name: str, module_path: str, class_name: str) -> None:
+    """Register a custom module so Robot can discover it by name."""
+    _MODULE_REGISTRY[name] = (module_path, class_name)
+
+
+def _instantiate_module(name: str, config: Dict[str, Any]) -> Optional[RobotModule]:
+    """Lazy-import and instantiate a module class by name."""
+    if name not in _MODULE_REGISTRY:
+        log.warning("[Robot] Unknown module '%s' — skipping", name)
+        return None
+
+    module_path, class_name = _MODULE_REGISTRY[name]
+    try:
+        import importlib
+        mod = importlib.import_module(module_path)
+        cls = getattr(mod, class_name)
+        instance = cls(config)
+        log.info("[Robot] Module '%s' instantiated (%s)", name, class_name)
+        return instance
+    except ImportError as e:
+        log.warning("[Robot] Module '%s' SDK not available: %s — stub mode", name, e)
+        return None
+    except Exception as e:
+        log.error("[Robot] Module '%s' init failed: %s", name, e)
+        return None
 
 
 class Robot:
+    """Config-driven container for hardware modules.
+
+    Only modules listed in the config dict are loaded. Each key is a module
+    name ("ugv", "lift", "arm", "hand", "camera", ...) and its value is a
+    dict with at least an "enabled" key (defaults to True).
+
+    Example config for pipe robot mini (camera + lift only):
+        config = {
+            "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
+            "camera": {"device": "/dev/video0"},
+        }
+
+    Full config for the standard robot:
+        config = {
+            "ugv":    {"host": "127.0.0.1", "port": 9100},
+            "lift":   {"can_channel": "can0", "node_id": 1},
+            "arm":    {"host": "192.168.56.101"},
+            "hand":   {"port": "/dev/ttyUSB1"},
+            "camera": {"device": "/dev/video0"},
+        }
     """
-    Aggregates UGV, lift, arm, and hand subsystems.
 
-    Designed to be used as a context manager:
-
-        with Robot(config) as robot:
-            robot.ugv.set_velocity(0.3, 0.0)
-            robot.lift.move_to(150.0)
-    """
-
-    def __init__(self, config: Optional[RobotConfig] = None):
-        self.config = config or RobotConfig()
-        self._lift_node = None
-        self._lift_fallback_state: Optional[LiftState] = None  # preserved when lift fails
-
-        self.ugv  = UGVController(self.config.ugv_host, self.config.ugv_port)
-        self.arm  = ArmController(self.config.arm_port,  self.config.arm_baudrate)
-        self.hand = HandController(self.config.hand_port, self.config.hand_baudrate)
-        # lift is initialised in start() because it needs a CAN node
-        self.lift: Optional[LiftController] = None
+    def __init__(self, config: Optional[Dict[str, Dict[str, Any]]] = None):
+        cfg = config or {}
+        self.config = cfg
+        # {name: RobotModule instance} — only enabled & successfully loaded modules
+        self.modules: Dict[str, RobotModule] = {}
+        self._module_state_schemas: Dict[str, Dict[str, Any]] = {}
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def start(self) -> "Robot":
         log.info("[Robot] Starting subsystems ...")
+        for name, mod_cfg in self.config.items():
+            if isinstance(mod_cfg, dict) and not mod_cfg.get("enabled", True):
+                log.info("[Robot] Module '%s' disabled in config — skipping", name)
+                continue
 
-        # UGV — non-blocking, reconnects in background
-        self.ugv.start()
-
-        # Lift — CAN node (may raise if CAN interface is absent)
-        try:
-            from stepper_motor_sdk import CANopenNode
-            self._lift_node = CANopenNode(
-                channel=self.config.lift_can_channel,
-                node_id=self.config.lift_node_id,
-            )
-            self._lift_node.start()
-            self.lift = LiftController(self._lift_node)
-            self.lift.setup()
-            self.lift.home(strategy=self.config.lift_home_strategy)
-        except Exception as e:
-            log.warning("[Robot] Lift init attempt 1 failed: %s", e)
-            # Retry once — CAN bus may need warm-up after socket creation
-            if self.lift:
-                self._lift_fallback_state = self.lift.get_state()
-                self.lift = None
-            if self._lift_node:
+            instance = _instantiate_module(name, mod_cfg if isinstance(mod_cfg, dict) else {})
+            if instance is None:
+                # Still record state schema so GUI doesn't break
                 try:
-                    self._lift_node.stop()
+                    _, class_name = _MODULE_REGISTRY.get(name, ("", ""))
+                    if class_name:
+                        import importlib
+                        module_path = _MODULE_REGISTRY[name][0]
+                        mod = importlib.import_module(module_path)
+                        cls = getattr(mod, class_name)
+                        dummy = cls({})
+                        self._module_state_schemas[name] = dummy.get_state_schema()
+                except Exception:
+                    self._module_state_schemas[name] = {"connected": False}
+                continue
+
+            try:
+                instance.start()
+                self.modules[name] = instance
+                self._module_state_schemas[name] = instance.get_state_schema()
+                log.info("[Robot] Module '%s' started", name)
+            except Exception as e:
+                log.warning("[Robot] Module '%s' start failed: %s", name, e)
+                self._module_state_schemas[name] = instance.get_state_schema()
+                try:
+                    instance.stop()
                 except Exception:
                     pass
-                self._lift_node = None
-            try:
-                import time as _time
-                _time.sleep(0.5)
-                from stepper_motor_sdk import CANopenNode as CANopenNode2
-                self._lift_node = CANopenNode2(
-                    channel=self.config.lift_can_channel,
-                    node_id=self.config.lift_node_id,
-                )
-                self._lift_node.start()
-                self.lift = LiftController(self._lift_node)
-                self.lift.setup()
-                self.lift.home(strategy=self.config.lift_home_strategy)
-                log.info("[Robot] Lift recovered on retry")
-            except Exception as e2:
-                log.warning("[Robot] Lift unavailable after retry: %s", e2)
-                if self.lift:
-                    self._lift_fallback_state = self.lift.get_state()
-                if self._lift_node:
-                    try:
-                        self._lift_node.stop()
-                    except Exception:
-                        pass
-                    self._lift_node = None
-                self.lift = None
 
-        # Arm / Hand — stubs, connect() returns False until SDK is wired in
-        self.arm.connect()
-        self.hand.connect()
-
-        log.info("[Robot] All subsystems started")
+        log.info("[Robot] %d module(s) started: %s",
+                 len(self.modules), list(self.modules.keys()))
         return self
 
     def stop(self) -> None:
         log.info("[Robot] Stopping subsystems ...")
-
-        self.ugv.stop()
-
-        if self.lift:
+        for name, module in reversed(list(self.modules.items())):
             try:
-                self.lift.stop()
+                module.stop()
+                log.info("[Robot] Module '%s' stopped", name)
             except Exception as e:
-                log.warning("[Robot] Lift stop error (ignored): %s", e)
-            try:
-                self.lift.shutdown()
-            except Exception as e:
-                log.warning("[Robot] Lift shutdown error (ignored): %s", e)
-
-        if self._lift_node:
-            try:
-                self._lift_node.stop()
-            except Exception:
-                pass
-
-        self.arm.disable()
-        self.arm.disconnect()
-        self.hand.disable()
-        self.hand.disconnect()
-
-        log.info("[Robot] All subsystems stopped")
+                log.warning("[Robot] Module '%s' stop error: %s", name, e)
+        self.modules.clear()
 
     def __enter__(self) -> "Robot":
         return self.start()
@@ -178,22 +151,41 @@ class Robot:
 
     # ── aggregate state ───────────────────────────────────────────────────────
 
-    def get_state(self) -> RobotState:
-        return RobotState(
-            ugv  = self.ugv.get_state(),
-            lift = self.lift.get_state() if self.lift else (self._lift_fallback_state or LiftState()),
-            arm  = self.arm.get_state(),
-            hand = self.hand.get_state(),
-            timestamp = time.time(),
-        )
+    def get_state(self) -> Dict[str, Any]:
+        """Return {module_name: module_state_dict, ...} plus timestamp."""
+        state: Dict[str, Any] = {"timestamp": time.time()}
+        for name, module in self.modules.items():
+            try:
+                state[name] = module.get_state()
+            except Exception as e:
+                log.warning("[Robot] get_state() for '%s' failed: %s", name, e)
+                state[name] = self._module_state_schemas.get(name, {"connected": False})
+        # Include schemas for modules that were never loaded
+        for name, schema in self._module_state_schemas.items():
+            if name not in state:
+                state[name] = dict(schema)
+        return state
 
-    # ── convenience helpers ───────────────────────────────────────────────────
+    # ── emergency ─────────────────────────────────────────────────────────────
 
     def emergency_stop(self) -> None:
-        """Stop all motion immediately."""
+        """Call emergency_stop() on all loaded modules."""
         log.warning("[Robot] EMERGENCY STOP")
-        self.ugv.emergency_stop()
-        if self.lift:
-            self.lift.stop()
-        self.arm.stop()
-        self.hand.stop()
+        for name, module in self.modules.items():
+            try:
+                module.emergency_stop()
+            except Exception as e:
+                log.warning("[Robot] emergency_stop() for '%s' failed: %s", name, e)
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def get(self, name: str) -> Optional[RobotModule]:
+        """Get a loaded module by name, or None."""
+        return self.modules.get(name)
+
+    def is_loaded(self, name: str) -> bool:
+        return name in self.modules
+
+    @property
+    def module_names(self) -> List[str]:
+        return list(self.modules.keys())
