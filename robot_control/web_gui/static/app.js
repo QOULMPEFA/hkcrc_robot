@@ -475,6 +475,7 @@ function _initWebRTC(panelId, vid, img, status, err) {
 	        { urls: "turn:stun.evan-brass.net:3478", username: "guest", credential: "password" },
 	        { urls: "turn:stun.evan-brass.net:3478?transport=tcp", username: "guest", credential: "password" },
 	      ],
+      iceTransportPolicy: "relay",
 	    });
     _cameraRTC[panelId] = pc;
 
