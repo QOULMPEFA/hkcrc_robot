@@ -469,7 +469,13 @@ function _renderCameraPanel(panelId, body) {
 
 function _initWebRTC(panelId, vid, img, status, err) {
   try {
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    const pc = new RTCPeerConnection({
+	      iceServers: [
+	        { urls: "stun:stun.l.google.com:19302" },
+	        { urls: "turn:stun.evan-brass.net:3478", username: "guest", credential: "password" },
+	        { urls: "turn:stun.evan-brass.net:3478?transport=tcp", username: "guest", credential: "password" },
+	      ],
+	    });
     _cameraRTC[panelId] = pc;
 
     pc.oniceconnectionstatechange = () => {
@@ -480,7 +486,7 @@ function _initWebRTC(panelId, vid, img, status, err) {
       }
     };
     let fallbackTimer = setTimeout(() => {
-      if (status) { status.textContent = "MJPEG"; status.style.color = "var(--muted)"; }
+      if (status) { status.textContent = "MJPEG (WebRTC 不可用)"; status.style.color = "var(--muted)"; }
     }, 8000);
     pc.ontrack = (evt) => {
       clearTimeout(fallbackTimer);
@@ -508,10 +514,10 @@ function _initWebRTC(panelId, vid, img, status, err) {
       const data = await resp.json();
       if (data.code !== 0) throw new Error("SRS " + data.code);
       await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
-      if (status) { status.textContent = "WebRTC 协商中"; status.style.color = "var(--warn)"; }
+      if (status) { status.textContent = "MJPEG (WebRTC 协商中)"; status.style.color = "var(--warn)"; }
     }).catch((e) => {
       console.log("WebRTC fallback — " + e.message);
-      if (status) { status.textContent = "MJPEG"; status.style.color = "var(--muted)"; }
+      if (status) { status.textContent = "MJPEG (WebRTC 不可用)"; status.style.color = "var(--muted)"; }
       if (img) img.style.display = "block";
     });
   } catch (e) {
