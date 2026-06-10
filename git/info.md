@@ -2,7 +2,7 @@
 
 ## Remote
 - URL: `https://github.com/QOULMPEFA/hkcrc_robot`
-- PAT: `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` (Expires Aug 31, 2026)
+- PAT: `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` (Expires on Tue, Sep 8 2026)
 
 ## Backup Flow
 1. PC: commit changes → `git push origin main`
