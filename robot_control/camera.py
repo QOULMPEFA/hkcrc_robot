@@ -10,11 +10,10 @@ Streaming paths:
 """
 
 import logging
-import queue
 import subprocess
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from robot_control.module_base import RobotModule
 
@@ -71,14 +70,15 @@ class CameraModule(RobotModule):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         cfg = config or {}
         self._device = cfg.get("device", "/dev/video0")
-        self._width = int(cfg.get("width", 1280))
-        self._height = int(cfg.get("height", 720))
+        self._width = int(cfg.get("width", 800))
+        self._height = int(cfg.get("height", 600))
         self._fps = int(cfg.get("fps", 15))
         self._rtmp_url = cfg.get("rtmp_url", "rtmp://localhost/live/cam")
 
-        self._lock = threading.Lock()
-        self._clients: Dict[int, queue.Queue] = {}
+        self._cond = threading.Condition()
+        self._client_seq: Dict[int, int] = {}
         self._frame: Optional[bytes] = None
+        self._frame_seq: int = 0
         self._last_frame_time = 0.0
         self._ffmpeg_proc: Optional[subprocess.Popen] = None
         self._running = False
@@ -151,10 +151,11 @@ class CameraModule(RobotModule):
                 return  # Exit hotplug watch, normal frame loop takes over
 
     def stop(self) -> None:
-        with self._lock:
+        with self._cond:
             self._running = False
             self._frame = None
-            self._clients.clear()
+            self._client_seq.clear()
+            self._cond.notify_all()
         self._kill_ffmpeg()
         log.info("[Camera] Module stopped")
 
@@ -175,10 +176,10 @@ class CameraModule(RobotModule):
         elif elapsed > _FRAME_TIMEOUT:
             signal = "stale"
 
-        with self._lock:
+        with self._cond:
             return {
                 "connected": self._running and self._ffmpeg_proc is not None,
-                "client_count": len(self._clients),
+                "client_count": len(self._client_seq),
                 "frame_bytes": len(self._frame) if self._frame else 0,
                 "device": self._device,
                 "signal": signal,
@@ -186,22 +187,36 @@ class CameraModule(RobotModule):
 
     # ── subscriber API ──────────────────────────────────────────────────
 
-    def subscribe(self) -> queue.Queue:
-        self._ensure_running()
-        q: queue.Queue = queue.Queue(maxsize=10)
-        with self._lock:
-            if self._frame:
-                q.put_nowait(self._frame)
-            self._clients[id(q)] = q
-        return q
+    _next_cid: int = 0
 
-    def unsubscribe(self, q: queue.Queue) -> None:
-        with self._lock:
-            self._clients.pop(id(q), None)
+    def subscribe(self) -> int:
+        """Return a client-id for use with wait_frame / unsubscribe."""
+        self._ensure_running()
+        cid = self._next_cid
+        CameraModule._next_cid = cid + 1
+        with self._cond:
+            self._client_seq[cid] = self._frame_seq
+        return cid
+
+    def unsubscribe(self, cid: int) -> None:
+        with self._cond:
+            self._client_seq.pop(cid, None)
+
+    def wait_frame(self, cid: int, timeout: float = 5.0) -> Tuple[Optional[bytes], int]:
+        """Block until a newer frame is available. Returns (frame, seq) or (None, seq) on timeout."""
+        with self._cond:
+            last = self._client_seq.get(cid, 0)
+            while self._frame_seq == last and self._running:
+                if not self._cond.wait(timeout):
+                    return None, last
+            if not self._running:
+                return None, last
+            self._client_seq[cid] = self._frame_seq
+            return self._frame, self._frame_seq
 
     def client_count(self) -> int:
-        with self._lock:
-            return len(self._clients)
+        with self._cond:
+            return len(self._client_seq)
 
     # ── internals: device selection ─────────────────────────────────────
 
@@ -304,18 +319,11 @@ class CameraModule(RobotModule):
                 frame_n += 1
                 msg = (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
                        + frame + b"\r\n")
-                with self._lock:
+                with self._cond:
                     self._frame = msg
+                    self._frame_seq += 1
                     self._last_frame_time = time.time()
-                    for q in self._clients.values():
-                        try:
-                            q.put_nowait(msg)
-                        except queue.Full:
-                            try:
-                                q.get_nowait()
-                                q.put_nowait(msg)
-                            except queue.Empty:
-                                pass
+                    self._cond.notify_all()
                 if frame_n % 150 == 1:
                     log.info("[Camera] frame #%d (%d bytes), %d client(s)",
                              frame_n, len(frame), self.client_count())
@@ -334,7 +342,7 @@ class CameraModule(RobotModule):
     # ── helpers ─────────────────────────────────────────────────────────
 
     def _ensure_running(self) -> None:
-        with self._lock:
+        with self._cond:
             need_start = self._ffmpeg_proc is None or self._ffmpeg_proc.poll() is not None
         if need_start:
             self._start_ffmpeg()

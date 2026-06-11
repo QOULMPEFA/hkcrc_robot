@@ -10,7 +10,6 @@ Run:
 
 import logging
 import os
-import queue
 import sys
 import subprocess
 import threading
@@ -73,17 +72,18 @@ def _camera_module():
     return None
 
 
-def _gen_client_stream(q):
-    """Yield frames from queue. Bails out after 5 s if no frame arrives."""
+def _gen_client_stream(cid):
+    """Yield latest frames via condition variable — zero buffering, always fresh."""
+    cam = _camera_module()
     count = 0
     try:
         while True:
-            try:
-                yield q.get(timeout=5)
-                count += 1
-            except queue.Empty:
+            frame, _seq = cam.wait_frame(cid, timeout=5)
+            if frame is None:
                 log.info("[Camera] /stream: timeout — sent %d frames", count)
                 return
+            count += 1
+            yield frame
     except GeneratorExit:
         log.info("[Camera] /stream: client disconnected — sent %d frames", count)
         raise
@@ -95,13 +95,13 @@ def camera_stream():
     cam = _camera_module()
     if not cam:
         return Response("Camera module not loaded", status=503)
-    q = cam.subscribe()
+    cid = cam.subscribe()
     log.info("[Camera] /stream: client subscribed (clients=%d)", cam.client_count())
     def generate():
         try:
-            yield from _gen_client_stream(q)
+            yield from _gen_client_stream(cid)
         finally:
-            cam.unsubscribe(q)
+            cam.unsubscribe(cid)
             log.info("[Camera] /stream: client unsubscribed (clients=%d)", cam.client_count())
     return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
@@ -401,23 +401,24 @@ def main():
 
     auth.init_db()
 
-    # ── Module config ──────────────────────────────────────────────────────
-    # All hardware modules are enabled by default.  Each module gracefully
-    # degrades to stub/standby when its SDK or hardware is absent.
-    # To disable a module, set "enabled": false or remove the key.
+    # ── Robot config — pick the preset that matches your hardware ──────────
+    # Each module gracefully degrades to stub/standby when its SDK or
+    # hardware is absent.  Set "enabled": false or remove the key to hide it.
     #
-    # Robot configurations supported:
-    #   Pipe robot  → motor + camera + lift
-    #   Full robot  → ugv + arm + hand + camera + lift
+    # ── All modules — enable what you need ───────────────────────────────
+    # Each module degrades to stub mode when SDK or hardware is absent.
+    # To hide a module from the GUI, remove it or set "enabled": false.
     config = {
         "arm":    {"host": "192.168.56.101"},
         "ugv":    {"host": "127.0.0.1", "port": 9100},
         "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
-        "camera": {"device": "/dev/video0", "rtmp_url": "rtmp://localhost/live/cam"},
-        # 以下模块暂无硬件，需要时取消注释
-        # "hand":   {"protocol": "modbus", "port": None, "baudrate": 115200, "slave_id": 0x7E},
-        # "motor":  {},
+        "camera": {"device": "/dev/video0"},
+        "motor":  {},
+        "hand":   {"protocol": "modbus", "port": None, "baudrate": 115200, "slave_id": 0x7E},
     }
+    #
+    # ── Pipe robot minimal ──────────────────────────────────────────────
+    # config = {"camera": {...}, "motor": {}, "lift": {...}}
 
     robot = Robot(config)
     robot.start()
