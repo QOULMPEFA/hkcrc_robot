@@ -336,8 +336,17 @@ class ArmController(RobotModule):
     def _parse_robot_state_body(self, body: bytes):
         """Parse RobotState body into joint data.
 
-        Tries sub-package parsing first (4B len + 1B type per sub-pkg).
-        Falls back to hardcoded offset 295 for q_actual.
+        UR5e PolyScope 5.x sends RobotState as a flat C struct on port 30002.
+        Full messages (~1472 bytes) contain all fields; incremental (~717 bytes)
+        contain only rapidly-changing fields (q_actual, qd_actual).
+
+        JointData struct layout (all fields are 6 × big-endian double = 48 bytes):
+          q_actual[6]       — confirmed at body offset 295
+          q_target[6]       — offset 343
+          qd_actual[6]      — offset 391
+          i_actual[6]       — offset 439
+          i_target[6]       — offset 487
+          joint_temperatures[6] — offset 535 (may be 6×float=24B in older versions)
         """
         if len(body) < 295 + 48:
             return
@@ -345,36 +354,53 @@ class ArmController(RobotModule):
         parsed_q = None
         parsed_i = None
         parsed_t = None
+        is_full_msg = len(body) > 1000  # full message has ~1472 bytes
 
-        # Try sub-package parsing
-        offset = 0
-        while offset + 5 <= len(body):
-            sub_len = struct.unpack(">I", body[offset:offset + 4])[0]
-            sub_type = body[offset + 4]
-            if sub_len < 5 or sub_len > len(body) - offset:
-                break
-            if sub_type == 2 and sub_len >= 293:  # JOINT_DATA: 6 fields × 48 bytes + 5B header
-                data_start = offset + 5
-                try:
-                    parsed_q = list(struct.unpack(">6d", body[data_start:data_start + 48]))
-                    parsed_q = [math.degrees(v) for v in parsed_q]
-                    # Field order: q_actual, q_target, qd_actual, i_actual, i_target, joint_temperatures
-                    i_off = data_start + 144  # skip 3 fields (q_actual + q_target + qd_actual)
-                    parsed_i = list(struct.unpack(">6d", body[i_off:i_off + 48]))
-                    t_off = data_start + 240  # skip 5 fields
-                    parsed_t = list(struct.unpack(">6d", body[t_off:t_off + 48]))
-                except struct.error:
-                    pass
-                break
-            offset += sub_len
+        def _valid_joint_angles(vals):
+            return all(-720 < v < 720 for v in vals)  # rad → deg must be sane
 
-        # Fallback: hardcoded offset 295 for q_actual
-        if parsed_q is None:
-            try:
-                raw = struct.unpack(">6d", body[295:295 + 48])
-                parsed_q = [math.degrees(v) for v in raw]
-            except struct.error:
-                return
+        def _valid_currents(vals):
+            return all(-50 < v < 50 for v in vals)  # amps, allow regen negative
+
+        def _valid_temps(vals):
+            return all(-10 < v < 120 for v in vals)  # celsius
+
+        try:
+            # Always parse q_actual at confirmed offset 295
+            raw = struct.unpack(">6d", body[295:295 + 48])
+            q_candidate = [math.degrees(v) for v in raw]
+            if _valid_joint_angles(q_candidate):
+                parsed_q = q_candidate
+
+            # Parse i_actual at offset 439 (q_actual + 3 fields)
+            if len(body) >= 439 + 48:
+                raw_i = struct.unpack(">6d", body[439:439 + 48])
+                if _valid_currents(raw_i):
+                    parsed_i = list(raw_i)
+
+            # Parse joint_temperatures at offset 535 (q_actual + 5 fields)
+            if len(body) >= 535 + 48:
+                raw_t = struct.unpack(">6d", body[535:535 + 48])
+                t_candidate = list(raw_t)
+                if _valid_temps(t_candidate):
+                    parsed_t = t_candidate
+                else:
+                    # Try 6 × float (24 bytes) instead of double
+                    if len(body) >= 535 + 24:
+                        raw_tf = struct.unpack(">6f", body[535:535 + 24])
+                        t_candidate = list(raw_tf)
+                        if _valid_temps(t_candidate):
+                            parsed_t = t_candidate
+
+            # For full messages, also try scanning for additional joint data blocks
+            # that might be at different offsets in newer controller versions
+            if is_full_msg and parsed_i is None:
+                parsed_i = self._scan_for_currents(body, start=400, end=800)
+            if is_full_msg and parsed_t is None:
+                parsed_t = self._scan_for_temps(body, start=500, end=900)
+
+        except struct.error:
+            pass
 
         with self._lock:
             if parsed_q:
@@ -383,8 +409,41 @@ class ArmController(RobotModule):
                 self._state.joint_currents_a = parsed_i
             if parsed_t:
                 self._state.joint_temps_c = parsed_t
-            # Software collision monitor: check if actual current spikes above threshold
             self._check_collision()
+
+    @staticmethod
+    def _scan_for_currents(body: bytes, start: int, end: int):
+        """Scan body range for a 6-double sequence that looks like motor currents (0-30A)."""
+        for off in range(start, min(end, len(body) - 48), 8):
+            try:
+                vals = list(struct.unpack(">6d", body[off:off + 48]))
+                # Motor currents are typically 0-20A, non-negative (or slightly negative for regen)
+                if all(-10 < v < 30 for v in vals) and any(abs(v) > 0.01 for v in vals):
+                    return vals
+            except struct.error:
+                continue
+        return None
+
+    @staticmethod
+    def _scan_for_temps(body: bytes, start: int, end: int):
+        """Scan body range for a 6-value sequence that looks like temperatures (15-80°C)."""
+        # Try doubles first
+        for off in range(start, min(end, len(body) - 48), 8):
+            try:
+                vals = list(struct.unpack(">6d", body[off:off + 48]))
+                if all(10 < v < 90 for v in vals):
+                    return vals
+            except struct.error:
+                continue
+        # Try floats
+        for off in range(start, min(end, len(body) - 24), 4):
+            try:
+                vals = list(struct.unpack(">6f", body[off:off + 24]))
+                if all(10 < v < 90 for v in vals):
+                    return vals
+            except struct.error:
+                continue
+        return None
 
     def _check_collision(self):
         """Software-level collision detection based on current monitoring.
