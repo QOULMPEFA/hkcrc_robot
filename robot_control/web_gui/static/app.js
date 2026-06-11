@@ -439,9 +439,15 @@ function _cleanupPanel(panelId, module) {
 window.addEventListener("blur", () => { if (_ugvKeysActivePanel) _ugvKeysStop(); });
 
 // ── Camera Panel ──────────────────────────────────────────────────────────────
-const _SRS_API_PORT = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
-const _cameraRTC = {};
-function _getSRSAPI() { return window.location.protocol + "//" + window.location.host + "/srs-api"; }
+const _cameraFLV = {};
+
+function _getFLVUrl() {
+  const host = window.location.hostname;
+  if (host === "frp-fit.com" || host === "64.49.47.165") {
+    return "http://" + host + ":35700/live/cam.flv";
+  }
+  return "http://" + host + ":8080/live/cam.flv";
+}
 
 function _renderCameraPanel(panelId, body) {
   body.innerHTML = `
@@ -463,66 +469,54 @@ function _renderCameraPanel(panelId, body) {
     img.addEventListener("load", () => { img.style.display = "block"; if (err) err.style.display = "none"; });
   }
 
-  // WebRTC attempt
-  _initWebRTC(panelId, vid, img, status, err);
+  _initFLV(panelId, vid, img, status, err);
 }
 
-function _initWebRTC(panelId, vid, img, status, err) {
+function _initFLV(panelId, vid, img, status, err) {
   try {
-    const pc = new RTCPeerConnection({
-	      iceServers: [
-	        { urls: "stun:stun.l.google.com:19302" },
-	        { urls: "turn:stun.evan-brass.net:3478", username: "guest", credential: "password" },
-	        { urls: "turn:stun.evan-brass.net:3478?transport=tcp", username: "guest", credential: "password" },
-	      ],
-      iceTransportPolicy: "relay",
-	    });
-    _cameraRTC[panelId] = pc;
-
-    pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === "disconnected" || pc.iceConnectionState === "failed") {
-        if (status) { status.textContent = "WebRTC 断线 (MJPEG)"; status.style.color = "var(--warn)"; }
-        if (img) img.style.display = "block";
-        if (vid) vid.style.display = "none";
-      }
-    };
-    let fallbackTimer = setTimeout(() => {
-      if (status) { status.textContent = "MJPEG (WebRTC 不可用)"; status.style.color = "var(--muted)"; }
-    }, 8000);
-    pc.ontrack = (evt) => {
-      clearTimeout(fallbackTimer);
-      if (vid) { vid.srcObject = evt.streams[0]; vid.style.display = "block"; }
-      if (img) img.style.display = "none";
-      if (err) err.style.display = "none";
-      if (status) { status.textContent = "WebRTC ✓"; status.style.color = "var(--accent2)"; }
-    };
-    pc.addTransceiver("video", { direction: "recvonly" });
-    pc.createOffer().then(async (offer) => {
-      await pc.setLocalDescription(offer);
-      await new Promise((r) => {
-        if (pc.iceGatheringState === "complete") r();
-        else pc.addEventListener("icecandidate", (e) => { if (!e.candidate) r(); });
-      });
-      const host = window.location.hostname;
-      const api = _getSRSAPI();
-      const streamUrl = "webrtc://" + host + "/live/cam";
-      const resp = await fetch(api + "/rtc/v1/play/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sdp: pc.localDescription.sdp, streamurl: streamUrl, api: api + "/rtc/v1/play/" }),
-      });
-      if (!resp.ok) throw new Error("API " + resp.status);
-      const data = await resp.json();
-      if (data.code !== 0) throw new Error("SRS " + data.code);
-      await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
-      if (status) { status.textContent = "MJPEG (WebRTC 协商中)"; status.style.color = "var(--warn)"; }
-    }).catch((e) => {
-      console.log("WebRTC fallback — " + e.message);
-      if (status) { status.textContent = "MJPEG (WebRTC 不可用)"; status.style.color = "var(--muted)"; }
-      if (img) img.style.display = "block";
+    if (typeof flvjs === "undefined" || !flvjs.isSupported()) {
+      if (status) { status.textContent = "MJPEG (FLV 不支持)"; status.style.color = "var(--muted)"; }
+      return;
+    }
+    const player = flvjs.createPlayer({
+      type: "flv",
+      url: _getFLVUrl(),
+      isLive: true,
+      enableStashBuffer: false,
     });
+    _cameraFLV[panelId] = player;
+    player.attachMediaElement(vid);
+    player.load();
+
+    let fallbackTimer = setTimeout(() => {
+      if (status) { status.textContent = "MJPEG (FLV 超时)"; status.style.color = "var(--muted)"; }
+    }, 8000);
+
+    player.on(flvjs.Events.ERROR, () => {
+      clearTimeout(fallbackTimer);
+      if (status) { status.textContent = "MJPEG (FLV 错误)"; status.style.color = "var(--muted)"; }
+      try { player.unload(); } catch (_) {}
+      if (img) img.style.display = "block";
+      if (vid) vid.style.display = "none";
+    });
+
+    player.on(flvjs.Events.METADATA_ARRIVED, () => {
+      clearTimeout(fallbackTimer);
+    });
+
+    player.on(flvjs.Events.LOADING_COMPLETE, () => {
+      if (vid.videoWidth > 0) {
+        clearTimeout(fallbackTimer);
+        if (vid) { vid.style.display = "block"; }
+        if (img) img.style.display = "none";
+        if (err) err.style.display = "none";
+        if (status) { status.textContent = "HTTP-FLV ✓"; status.style.color = "var(--accent2)"; }
+      }
+    });
+
+    player.play();
   } catch (e) {
-    console.log("WebRTC error — " + e.message);
+    console.log("FLV error — " + e.message);
     if (img) img.style.display = "block";
   }
 }
