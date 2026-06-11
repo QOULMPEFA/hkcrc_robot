@@ -439,20 +439,10 @@ function _cleanupPanel(panelId, module) {
 window.addEventListener("blur", () => { if (_ugvKeysActivePanel) _ugvKeysStop(); });
 
 // ── Camera Panel ──────────────────────────────────────────────────────────────
-const _cameraFLV = {};
-
-function _getFLVUrl() {
-  const host = window.location.hostname;
-  if (host === "frp-fit.com" || host === "64.49.47.165") {
-    return "http://" + host + ":35700/live/cam.flv";
-  }
-  return "http://" + host + ":8080/live/cam.flv";
-}
 
 function _renderCameraPanel(panelId, body) {
   body.innerHTML = `
     <div class="camera-wrap" id="${panelId}-cam-wrap">
-      <video id="${panelId}-cam-video" autoplay muted playsinline style="display:none"></video>
       <img id="${panelId}-cam-img" src="/stream" alt="camera" />
       <div class="camera-error" id="${panelId}-cam-err" style="display:none">摄像头未连接</div>
     </div>
@@ -460,64 +450,11 @@ function _renderCameraPanel(panelId, body) {
   `;
 
   const img = el(panelId + "-cam-img");
-  const vid = el(panelId + "-cam-video");
   const err = el(panelId + "-cam-err");
-  const status = el(panelId + "-cam-status");
 
   if (img) {
     img.addEventListener("error", () => { img.style.display = "none"; if (err) err.style.display = "flex"; });
     img.addEventListener("load", () => { img.style.display = "block"; if (err) err.style.display = "none"; });
-  }
-
-  _initFLV(panelId, vid, img, status, err);
-}
-
-function _initFLV(panelId, vid, img, status, err) {
-  try {
-    if (typeof flvjs === "undefined" || !flvjs.isSupported()) {
-      if (status) { status.textContent = "MJPEG (FLV 不支持)"; status.style.color = "var(--muted)"; }
-      return;
-    }
-    const player = flvjs.createPlayer({
-      type: "flv",
-      url: _getFLVUrl(),
-      isLive: true,
-      enableStashBuffer: false,
-    });
-    _cameraFLV[panelId] = player;
-    player.attachMediaElement(vid);
-    player.load();
-
-    let fallbackTimer = setTimeout(() => {
-      if (status) { status.textContent = "MJPEG (FLV 超时)"; status.style.color = "var(--muted)"; }
-    }, 8000);
-
-    player.on(flvjs.Events.ERROR, () => {
-      clearTimeout(fallbackTimer);
-      if (status) { status.textContent = "MJPEG (FLV 错误)"; status.style.color = "var(--muted)"; }
-      try { player.unload(); } catch (_) {}
-      if (img) img.style.display = "block";
-      if (vid) vid.style.display = "none";
-    });
-
-    player.on(flvjs.Events.METADATA_ARRIVED, () => {
-      clearTimeout(fallbackTimer);
-    });
-
-    player.on(flvjs.Events.LOADING_COMPLETE, () => {
-      if (vid.videoWidth > 0) {
-        clearTimeout(fallbackTimer);
-        if (vid) { vid.style.display = "block"; }
-        if (img) img.style.display = "none";
-        if (err) err.style.display = "none";
-        if (status) { status.textContent = "HTTP-FLV ✓"; status.style.color = "var(--accent2)"; }
-      }
-    });
-
-    player.play();
-  } catch (e) {
-    console.log("FLV error — " + e.message);
-    if (img) img.style.display = "block";
   }
 }
 

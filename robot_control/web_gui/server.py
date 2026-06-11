@@ -10,6 +10,7 @@ Run:
 
 import logging
 import os
+import queue
 import sys
 import subprocess
 import threading
@@ -74,19 +75,15 @@ def _camera_module():
 
 def _gen_client_stream(q):
     """Yield frames from queue. Bails out after 5 s if no frame arrives."""
-    deadline = time.time() + 5
     count = 0
     try:
         while True:
-            if q:
-                yield q.pop(0)
+            try:
+                yield q.get(timeout=5)
                 count += 1
-                deadline = time.time() + 5
-            elif time.time() > deadline:
+            except queue.Empty:
                 log.info("[Camera] /stream: timeout — sent %d frames", count)
                 return
-            else:
-                time.sleep(0.05)
     except GeneratorExit:
         log.info("[Camera] /stream: client disconnected — sent %d frames", count)
         raise

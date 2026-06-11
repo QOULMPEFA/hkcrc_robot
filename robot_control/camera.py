@@ -10,6 +10,7 @@ Streaming paths:
 """
 
 import logging
+import queue
 import subprocess
 import threading
 import time
@@ -76,7 +77,7 @@ class CameraModule(RobotModule):
         self._rtmp_url = cfg.get("rtmp_url", "rtmp://localhost/live/cam")
 
         self._lock = threading.Lock()
-        self._clients: Dict[int, list] = {}
+        self._clients: Dict[int, queue.Queue] = {}
         self._frame: Optional[bytes] = None
         self._last_frame_time = 0.0
         self._ffmpeg_proc: Optional[subprocess.Popen] = None
@@ -185,16 +186,16 @@ class CameraModule(RobotModule):
 
     # ── subscriber API ──────────────────────────────────────────────────
 
-    def subscribe(self) -> list:
+    def subscribe(self) -> queue.Queue:
         self._ensure_running()
-        q: list = []
+        q: queue.Queue = queue.Queue(maxsize=10)
         with self._lock:
             if self._frame:
-                q.append(self._frame)
+                q.put_nowait(self._frame)
             self._clients[id(q)] = q
         return q
 
-    def unsubscribe(self, q: list) -> None:
+    def unsubscribe(self, q: queue.Queue) -> None:
         with self._lock:
             self._clients.pop(id(q), None)
 
@@ -223,33 +224,32 @@ class CameraModule(RobotModule):
     # ── internals: unified ffmpeg (MJPEG pipe + RTMP push) ──────────────
 
     def _start_ffmpeg(self) -> None:
-        """Launch ffmpeg with dual output: MJPEG to pipe:1 + H.264 to RTMP.
+        """Launch ffmpeg with MJPEG passthrough to pipe:1 (low-latency).
 
         Single device open avoids contention on USB cameras that don't
         support concurrent access.
         """
         self._kill_ffmpeg()
         cmd = [
-            "ffmpeg", "-fflags", "nobuffer",
+            "ffmpeg",
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            "-analyzeduration", "0",
+            "-probesize", "32",
             "-f", "v4l2",
             "-input_format", "mjpeg",
             "-framerate", "30",
             "-video_size", f"{self._width}x{self._height}",
             "-i", self._device,
-            # Output 1: MJPEG passthrough → stdout (HTTP /stream)
             "-c:v", "copy",
             "-f", "image2pipe", "pipe:1",
-            # Output 2: H.264 → RTMP (SRS → WebRTC)
-            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-            "-pix_fmt", "yuv420p", "-g", "30", "-b:v", "1M",
-            "-an",
-            "-f", "flv", self._rtmp_url,
         ]
         try:
             self._ffmpeg_proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                bufsize=0)
             self._last_frame_time = time.time()
-            log.info("[Camera] ffmpeg started (pid=%d) on %s → pipe + RTMP",
+            log.info("[Camera] ffmpeg started (pid=%d) on %s → MJPEG pipe",
                      self._ffmpeg_proc.pid, self._device)
         except Exception as exc:
             log.error("[Camera] ffmpeg launch failed: %s", exc)
@@ -308,7 +308,14 @@ class CameraModule(RobotModule):
                     self._frame = msg
                     self._last_frame_time = time.time()
                     for q in self._clients.values():
-                        q.append(msg)
+                        try:
+                            q.put_nowait(msg)
+                        except queue.Full:
+                            try:
+                                q.get_nowait()
+                                q.put_nowait(msg)
+                            except queue.Empty:
+                                pass
                 if frame_n % 150 == 1:
                     log.info("[Camera] frame #%d (%d bytes), %d client(s)",
                              frame_n, len(frame), self.client_count())
