@@ -700,7 +700,11 @@ function _renderArmPanel(panelId, body) {
       <label>运动速度 <span id="${panelId}-lbl-arm-speed">20</span>%
         <input type="range" id="${panelId}-sl-arm-speed" min="1" max="100" step="1" value="20" />
       </label>
+      <label>碰撞检测 <span id="${panelId}-lbl-arm-cs">0.30</span>
+        <input type="range" id="${panelId}-sl-arm-cs" min="0.05" max="1.0" step="0.05" value="0.30" />
+      </label>
     </div>
+    <div id="${panelId}-arm-collision-warn" class="collision-warn" style="display:none"></div>
     <div class="joint-grid" id="${panelId}-arm-joints"></div>
     <div class="btn-row">
       <button class="btn-primary ctrl"   id="${panelId}-arm-enable">使能</button>
@@ -729,13 +733,16 @@ function _renderArmPanel(panelId, body) {
   if (armGrid) {
     ARM_JOINTS.forEach((name, i) => {
       const row = document.createElement("div");
-      row.className = "joint-row";
+      row.className = "joint-row arm-joint-row";
       row.innerHTML = `
         <label>${name}</label>
         <button class="dpad-btn" style="width:28px;height:28px;font-size:14px;margin-right:2px" data-j="${i}" data-d="-5">◀</button>
         <input type="range" id="${panelId}-arm-j${i}" min="-180" max="180" step="1" value="0" />
         <button class="dpad-btn" style="width:28px;height:28px;font-size:14px;margin-left:2px" data-j="${i}" data-d="5">▶</button>
         <span class="val" id="${panelId}-arm-j${i}-val">0.0°</span>
+        <span class="joint-actual" id="${panelId}-arm-j${i}-act">实 —</span>
+        <span class="joint-load" id="${panelId}-arm-j${i}-load">— A</span>
+        <span class="joint-temp" id="${panelId}-arm-j${i}-temp">— °C</span>
       `;
       armGrid.appendChild(row);
 
@@ -775,6 +782,17 @@ function _renderArmPanel(panelId, body) {
   if (slSpeed) {
     slSpeed.addEventListener("input", () => {
       const lbl = el(panelId + "-lbl-arm-speed"); if (lbl) lbl.textContent = slSpeed.value;
+    });
+  }
+
+  // Collision sensitivity slider
+  const slCS = el(panelId + "-sl-arm-cs");
+  if (slCS) {
+    slCS.addEventListener("input", () => {
+      const lbl = el(panelId + "-lbl-arm-cs"); if (lbl) lbl.textContent = parseFloat(slCS.value).toFixed(2);
+    });
+    slCS.addEventListener("change", () => {
+      socket.emit("arm_set_collision_sensitivity", { level: parseFloat(slCS.value) });
     });
   }
 
@@ -1029,6 +1047,27 @@ function _updateArmState(panelId, s) {
     afb.style.display = s.is_fault ? "inline-block" : "none";
     if (s.is_fault && s.fault_text) afb.title = s.fault_text;
   }
+
+  // Collision sensitivity slider (don't update while user is dragging)
+  const slCS = el(panelId + "-sl-arm-cs");
+  const lblCS = el(panelId + "-lbl-arm-cs");
+  if (slCS && !slCS.matches(":active") && typeof s.collision_sensitivity === "number") {
+    slCS.value = s.collision_sensitivity;
+    if (lblCS) lblCS.textContent = s.collision_sensitivity.toFixed(2);
+  }
+
+  // Collision warning banner
+  const cwEl = el(panelId + "-arm-collision-warn");
+  if (cwEl) {
+    if (s.collision_warning) {
+      cwEl.style.display = "block";
+      cwEl.textContent = "⚠ " + s.collision_warning;
+    } else {
+      cwEl.style.display = "none";
+    }
+  }
+
+  // Commanded joint angles (update sliders)
   if (s.joint_angles_deg) {
     s.joint_angles_deg.forEach((angle, i) => {
       const sl = el(panelId + `-arm-j${i}`);
@@ -1037,6 +1076,43 @@ function _updateArmState(panelId, s) {
       if (val) val.textContent = fmt(angle, 1) + "°";
     });
   }
+
+  // Actual joint angles from hardware
+  if (s.joint_actual_deg) {
+    s.joint_actual_deg.forEach((angle, i) => {
+      const actEl = el(panelId + `-arm-j${i}-act`);
+      if (actEl) {
+        actEl.textContent = "实 " + fmt(angle, 1) + "°";
+        // Color-code: green if close to commanded, yellow if diverging
+        const cmd = (s.joint_angles_deg || [])[i] || 0;
+        const diff = Math.abs(angle - cmd);
+        actEl.style.color = diff < 1 ? "#4caf50" : diff < 5 ? "#ff9800" : "#f44336";
+      }
+    });
+  }
+
+  // Joint currents
+  if (s.joint_currents_a) {
+    s.joint_currents_a.forEach((cur, i) => {
+      const ldEl = el(panelId + `-arm-j${i}-load`);
+      if (ldEl) {
+        ldEl.textContent = fmt(cur, 2) + " A";
+        ldEl.style.color = Math.abs(cur) > 5 ? "#ff9800" : "#999";
+      }
+    });
+  }
+
+  // Joint temperatures
+  if (s.joint_temps_c) {
+    s.joint_temps_c.forEach((tmp, i) => {
+      const tpEl = el(panelId + `-arm-j${i}-temp`);
+      if (tpEl) {
+        tpEl.textContent = fmt(tmp, 0) + " °C";
+        tpEl.style.color = tmp > 65 ? "#ff9800" : tmp > 75 ? "#f44336" : "#999";
+      }
+    });
+  }
+
   _updateLogPanel(panelId + "-arm-log-panel", s.logs);
 }
 

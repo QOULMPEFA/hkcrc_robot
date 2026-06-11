@@ -450,6 +450,50 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   font-size: 12px;
 }
 
+/* ── arm joint extra data ────────────────────────────────────────────────── */
+.arm-joint-row {
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  padding: 2px 0;
+}
+.arm-joint-row label {
+  width: 28px;
+}
+.arm-joint-row input[type="range"] {
+  flex: 1;
+  min-width: 80px;
+}
+.arm-joint-row .val {
+  width: 38px;
+  font-size: 11px;
+}
+.arm-joint-row .joint-actual,
+.arm-joint-row .joint-load,
+.arm-joint-row .joint-temp {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  min-width: 44px;
+  text-align: right;
+}
+
+/* ── collision warning banner ─────────────────────────────────────────────── */
+.collision-warn {
+  background: #3d1a1a;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+  animation: pulse-warn 1.8s ease-in-out infinite;
+}
+
+@keyframes pulse-warn {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.6; }
+}
+
 /* ── panel diagnostics line ──────────────────────────────────────────────── */
 .panel-diag {
   font-size: 11px;

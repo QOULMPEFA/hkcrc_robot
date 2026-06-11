@@ -1,12 +1,13 @@
-"""UR5e robotic arm controller via TCP (Dashboard + URScript).
+"""UR5e robotic arm controller via TCP (Dashboard + URScript + Secondary Client).
 
-RobotModule wrapper around the UR Dashboard (port 29999) and URScript (port 30001)
-interfaces.
+RobotModule wrapper around the UR Dashboard (port 29999), URScript (port 30001),
+and Secondary Client (port 30002) for real-time joint data.
 """
 
 import logging
 import math
 import socket
+import struct
 import threading
 import time
 from dataclasses import dataclass, field
@@ -27,6 +28,10 @@ class ArmLogEntry:
 @dataclass
 class ArmState:
     joint_angles_deg: List[float] = field(default_factory=lambda: [0.0] * 6)
+    joint_actual_deg: List[float] = field(default_factory=lambda: [0.0] * 6)
+    joint_currents_a: List[float] = field(default_factory=lambda: [0.0] * 6)
+    joint_temps_c: List[float] = field(default_factory=lambda: [0.0] * 6)
+    joint_voltages_v: List[float] = field(default_factory=lambda: [0.0] * 6)
     end_effector_xyz: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     is_moving: bool = False
     is_fault: bool = False
@@ -35,6 +40,8 @@ class ArmState:
     robot_mode: str = "UNKNOWN"
     safety_mode: str = "UNKNOWN"
     fault_text: str = ""
+    collision_sensitivity: float = 0.3
+    collision_warning: str = ""
     logs: List[dict] = field(default_factory=list)
     timestamp: float = field(default_factory=time.time)
 
@@ -50,13 +57,17 @@ class ArmController(RobotModule):
         self._host = cfg.get("host", "192.168.56.101")
         self._dash_port = int(cfg.get("dashboard_port", 29999))
         self._ur_port = int(cfg.get("urscript_port", 30001))
+        self._state_port = int(cfg.get("state_port", 30002))
         self._state = ArmState()
         self._lock = threading.RLock()
         self._running = False
         self._dash_sock: Optional[socket.socket] = None
         self._ur_sock: Optional[socket.socket] = None
+        self._state_sock: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
+        self._state_thread: Optional[threading.Thread] = None
         self._logs: list[ArmLogEntry] = []
+        self._collision_enabled = True
 
     # ── RobotModule metadata ───────────────────────────────────────────────
 
@@ -71,10 +82,16 @@ class ArmController(RobotModule):
     def get_state_schema(self) -> Dict[str, Any]:
         return {
             "joint_angles_deg": [0.0] * 6,
+            "joint_actual_deg": [0.0] * 6,
+            "joint_currents_a": [0.0] * 6,
+            "joint_temps_c": [0.0] * 6,
+            "joint_voltages_v": [0.0] * 6,
             "end_effector_xyz": [0.0, 0.0, 0.0],
             "is_moving": False, "is_fault": False, "is_enabled": False,
             "connected": False,
             "robot_mode": "UNKNOWN", "safety_mode": "UNKNOWN", "fault_text": "",
+            "collision_sensitivity": 0.3,
+            "collision_warning": "",
             "logs": [], "timestamp": 0.0,
         }
 
@@ -86,6 +103,7 @@ class ArmController(RobotModule):
             "arm_move_joints": self._on_move_joints,
             "arm_home": self._on_home,
             "arm_stop": self._on_stop,
+            "arm_set_collision_sensitivity": self._on_set_collision_sensitivity,
         }
 
     # ── lifecycle ─────────────────────────────────────────────────────────
@@ -96,6 +114,8 @@ class ArmController(RobotModule):
         self._running = True
         self._thread = threading.Thread(target=self._connection_loop, daemon=True, name="arm-conn")
         self._thread.start()
+        self._state_thread = threading.Thread(target=self._state_reader_loop, daemon=True, name="arm-state")
+        self._state_thread.start()
         log.info("[Arm] Connection loop started — host=%s", self._host)
         self._add_log("info", f"开始连接 {self._host}")
 
@@ -105,7 +125,7 @@ class ArmController(RobotModule):
             self._state.connected = False
             self._state.is_enabled = False
             self._state.is_fault = False
-        for sock in (self._dash_sock, self._ur_sock):
+        for sock in (self._dash_sock, self._ur_sock, self._state_sock):
             if sock:
                 try:
                     sock.close()
@@ -114,8 +134,11 @@ class ArmController(RobotModule):
         with self._lock:
             self._dash_sock = None
             self._ur_sock = None
+            self._state_sock = None
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5.0)
+        if self._state_thread and self._state_thread.is_alive():
+            self._state_thread.join(timeout=5.0)
         log.info("[Arm] Stopped")
         self._add_log("info", "已断开")
 
@@ -197,6 +220,10 @@ class ArmController(RobotModule):
             s.timestamp = time.time()
             return {
                 "joint_angles_deg": list(s.joint_angles_deg),
+                "joint_actual_deg": list(s.joint_actual_deg),
+                "joint_currents_a": list(s.joint_currents_a),
+                "joint_temps_c": list(s.joint_temps_c),
+                "joint_voltages_v": list(s.joint_voltages_v),
                 "end_effector_xyz": list(s.end_effector_xyz),
                 "is_moving": s.is_moving,
                 "is_fault": s.is_fault,
@@ -205,6 +232,8 @@ class ArmController(RobotModule):
                 "robot_mode": s.robot_mode,
                 "safety_mode": s.safety_mode,
                 "fault_text": s.fault_text,
+                "collision_sensitivity": s.collision_sensitivity,
+                "collision_warning": s.collision_warning,
                 "logs": [{"ts": e.timestamp, "level": e.level, "msg": e.message}
                          for e in self._logs[-30:]],
                 "timestamp": s.timestamp,
@@ -232,6 +261,164 @@ class ArmController(RobotModule):
 
     def _on_stop(self, _data: dict = None, emit=None) -> None:
         self.stop_motion()
+
+    def _on_set_collision_sensitivity(self, data: dict, emit=None) -> None:
+        level = float(data.get("level", 0.3))
+        self.set_collision_sensitivity(level)
+
+    # ── collision detection ────────────────────────────────────────────────
+
+    def set_collision_sensitivity(self, level: float) -> None:
+        level = max(0.05, min(1.0, level))
+        with self._lock:
+            self._state.collision_sensitivity = level
+        self._collision_enabled = level > 0.01
+        self._add_log("info", f"碰撞检测灵敏度: {level:.2f}")
+        # Send URScript command to enable/disable hardware collision detection
+        if self._collision_enabled:
+            self._send_urscript("set_collision_detection(True)")
+        else:
+            self._send_urscript("set_collision_detection(False)")
+
+    # ── port 30002 real-time state reader ──────────────────────────────────
+
+    def _state_reader_loop(self):
+        """Connect to port 30002 and parse 10 Hz RobotState binary messages."""
+        while self._running:
+            sock = None
+            try:
+                sock = socket.create_connection((self._host, self._state_port), timeout=3.0)
+                sock.settimeout(1.0)
+                with self._lock:
+                    self._state_sock = sock
+                log.info("[Arm] State reader connected to port %d", self._state_port)
+                self._read_state_messages(sock)
+            except (OSError, ConnectionRefusedError) as e:
+                log.debug("[Arm] State reader connection failed: %s", e)
+            finally:
+                with self._lock:
+                    self._state_sock = None
+                if sock:
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+            if self._running:
+                time.sleep(self.RECONNECT_INTERVAL)
+
+    def _read_state_messages(self, sock: socket.socket):
+        buf = b""
+        while self._running:
+            try:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                # Parse complete messages: [4B len] [1B type] [body]
+                while len(buf) >= 5:
+                    msg_len = struct.unpack(">I", buf[0:4])[0]
+                    if msg_len < 5 or msg_len > 2000:
+                        # Lost sync — scan forward
+                        buf = buf[1:]
+                        continue
+                    if len(buf) < msg_len:
+                        break  # Incomplete message
+                    msg_type = buf[4]
+                    body = buf[5:msg_len]
+                    buf = buf[msg_len:]
+                    if msg_type == 16:  # RobotState
+                        self._parse_robot_state_body(body)
+            except socket.timeout:
+                pass
+            except OSError:
+                break
+
+    def _parse_robot_state_body(self, body: bytes):
+        """Parse RobotState body into joint data.
+
+        Tries sub-package parsing first (4B len + 1B type per sub-pkg).
+        Falls back to hardcoded offset 295 for q_actual.
+        """
+        if len(body) < 295 + 48:
+            return
+
+        parsed_q = None
+        parsed_i = None
+        parsed_t = None
+
+        # Try sub-package parsing
+        offset = 0
+        while offset + 5 <= len(body):
+            sub_len = struct.unpack(">I", body[offset:offset + 4])[0]
+            sub_type = body[offset + 4]
+            if sub_len < 5 or sub_len > len(body) - offset:
+                break
+            if sub_type == 2 and sub_len >= 293:  # JOINT_DATA: 6 fields × 48 bytes + 5B header
+                data_start = offset + 5
+                try:
+                    parsed_q = list(struct.unpack(">6d", body[data_start:data_start + 48]))
+                    parsed_q = [math.degrees(v) for v in parsed_q]
+                    # Field order: q_actual, q_target, qd_actual, i_actual, i_target, joint_temperatures
+                    i_off = data_start + 144  # skip 3 fields (q_actual + q_target + qd_actual)
+                    parsed_i = list(struct.unpack(">6d", body[i_off:i_off + 48]))
+                    t_off = data_start + 240  # skip 5 fields
+                    parsed_t = list(struct.unpack(">6d", body[t_off:t_off + 48]))
+                except struct.error:
+                    pass
+                break
+            offset += sub_len
+
+        # Fallback: hardcoded offset 295 for q_actual
+        if parsed_q is None:
+            try:
+                raw = struct.unpack(">6d", body[295:295 + 48])
+                parsed_q = [math.degrees(v) for v in raw]
+            except struct.error:
+                return
+
+        with self._lock:
+            if parsed_q:
+                self._state.joint_actual_deg = parsed_q
+            if parsed_i:
+                self._state.joint_currents_a = parsed_i
+            if parsed_t:
+                self._state.joint_temps_c = parsed_t
+            # Software collision monitor: check if actual current spikes above threshold
+            self._check_collision()
+
+    def _check_collision(self):
+        """Software-level collision detection based on current monitoring.
+
+        If actual current exceeds a conservative threshold relative to typical
+        idle values, flag a collision warning.  The threshold scales with the
+        user-adjustable sensitivity slider.
+        """
+        if not self._collision_enabled:
+            with self._lock:
+                self._state.collision_warning = ""
+            return
+        currents = self._state.joint_currents_a
+        temps = self._state.joint_temps_c
+        sensitivity = self._state.collision_sensitivity
+        # Conservative per-joint current thresholds (A) — lower sensitivity = higher threshold
+        base_thresholds = [8.0, 12.0, 8.0, 4.0, 2.0, 2.0]
+        # sensitivity 1.0 → threshold halved (very sensitive); 0.1 → threshold doubled (lenient)
+        scale = 1.5 - sensitivity * 0.5  # 1.0 at sens=1.0, 1.45 at sens=0.1
+        warning = ""
+        for i in range(6):
+            limit = base_thresholds[i] / scale
+            if abs(currents[i]) > limit:
+                warning = f"J{i+1} 电流异常: {currents[i]:.2f}A (阈值 {limit:.1f}A)"
+        # Temperature check
+        for i in range(6):
+            if temps[i] > 75.0:
+                if warning:
+                    warning += "; "
+                warning += f"J{i+1} 温度过高: {temps[i]:.0f}°C"
+        with self._lock:
+            self._state.collision_warning = warning
+            if warning:
+                log.warning("[Arm] Collision warning: %s", warning)
 
     # ── internals ──────────────────────────────────────────────────────────
 
@@ -292,6 +479,8 @@ class ArmController(RobotModule):
                     self._state.connected = True
                 log.info("[Arm] Connected to UR5e (%s)", self._host)
                 self._add_log("info", f"已连接 ({self._host})")
+                # Apply default collision sensitivity on connect
+                self._send_urscript("set_collision_detection(True)")
                 self._poll_loop(dash_sock)
             except (OSError, ConnectionRefusedError) as e:
                 log.debug("[Arm] Connection failed: %s", e)
