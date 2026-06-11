@@ -57,7 +57,7 @@ class ArmController(RobotModule):
         self._host = cfg.get("host", "192.168.56.101")
         self._dash_port = int(cfg.get("dashboard_port", 29999))
         self._ur_port = int(cfg.get("urscript_port", 30001))
-        self._state_port = int(cfg.get("state_port", 30004))
+        self._state_port = int(cfg.get("state_port", 30002))
         self._state = ArmState()
         self._lock = threading.RLock()
         self._running = False
@@ -280,21 +280,19 @@ class ArmController(RobotModule):
         else:
             self._send_urscript("set_collision_detection(False)")
 
-    # ── RTDE real-time state reader (port 30004) ───────────────────────────
+    # ── Secondary Client state reader (port 30002) ──────────────────────────
+    # UR5e RobotState message format (PolyScope 5.x):
+    #   Outer: [4B BE int32 total_len] [1B type] [sub-packages...]
+    #   Sub-pkg: [4B BE int32 len (includes self+type)] [1B type] [data]
+    # JOINT_DATA (type 1): 251 bytes, six joints of dddffffB each
+    JOINT_FMT = "!iB dddffffB dddffffB dddffffB dddffffB dddffffB dddffffB"
+    JOINT_FMT_SIZE = 251
 
-    # RTDE output recipe — field order defines binary layout.
-    # Each field is 1 or 6 big-endian doubles (8 bytes each).
-    RTDE_RECIPE = [
-        ("actual_q",              6),   # offset   0,  48 bytes
-        ("actual_current",         6),   # offset  48,  48 bytes
-        ("joint_temperatures",     6),   # offset  96,  48 bytes
-        ("robot_mode",             1),   # offset 144,   8 bytes
-        ("safety_mode",            1),   # offset 152,   8 bytes
-    ]
-    RTDE_PKG_DATA_LEN = 160  # total bytes from recipe above
+    # ROBOT_MODE_DATA (type 0): 38 or 46 bytes depending on firmware
+    RM_FMT_V3 = "!iBQ???????BBdd"  # 38 bytes
 
     def _state_reader_loop(self):
-        """Connect to RTDE port 30004 and stream real-time joint data."""
+        """Connect to port 30002 and parse RobotState sub-packages."""
         while self._running:
             sock = None
             try:
@@ -302,11 +300,10 @@ class ArmController(RobotModule):
                 sock.settimeout(2.0)
                 with self._lock:
                     self._state_sock = sock
-                log.info("[Arm] RTDE connected to port %d", self._state_port)
-                self._rtde_handshake(sock)
-                self._rtde_read_loop(sock)
+                log.info("[Arm] State reader connected to port %d", self._state_port)
+                self._sec_read_loop(sock)
             except (OSError, ConnectionRefusedError) as e:
-                log.debug("[Arm] RTDE connection failed: %s", e)
+                log.debug("[Arm] State reader connection failed: %s", e)
             finally:
                 with self._lock:
                     self._state_sock = None
@@ -318,54 +315,8 @@ class ArmController(RobotModule):
             if self._running:
                 time.sleep(self.RECONNECT_INTERVAL)
 
-    def _rtde_handshake(self, sock: socket.socket):
-        """Perform RTDE protocol handshake: version → setup → start."""
-        # In PolyScope ≥5.0 the client sends first (no welcome message).
-        # Step 1: request protocol version
-        sock.sendall(b"RTDE_REQUEST_PROTOCOL_VERSION 2\n")
-        time.sleep(0.1)
-        resp = self._rtde_recv_line(sock)
-        log.info("[Arm] RTDE version: %s", resp)
-
-        # Step 2: setup output recipe
-        names = ",".join(f[0] for f in self.RTDE_RECIPE)
-        recipe_id = 7
-        cmd = f"RTDE_CONTROL_PACKAGE_SETUP_OUTPUTS {recipe_id} {names}\n"
-        sock.sendall(cmd.encode())
-        time.sleep(0.2)
-        resp = self._rtde_recv_line(sock)
-        log.info("[Arm] RTDE setup: %s", resp)
-        if resp and "ACCEPTED" not in resp.upper():
-            log.warning("[Arm] RTDE recipe rejected: %s — trying alt names", resp)
-            # Fallback: try without temperatures
-            alt_names = "actual_q,actual_current,robot_mode,safety_mode"
-            cmd2 = f"RTDE_CONTROL_PACKAGE_SETUP_OUTPUTS {recipe_id} {alt_names}\n"
-            sock.sendall(cmd2.encode())
-            time.sleep(0.2)
-            resp = self._rtde_recv_line(sock)
-            log.info("[Arm] RTDE alt setup: %s", resp)
-
-        # Step 3: start streaming
-        sock.sendall(b"RTDE_CONTROL_PACKAGE_START\n")
-        time.sleep(0.1)
-        resp = self._rtde_recv_line(sock)
-        log.info("[Arm] RTDE start: %s", resp)
-
-    @staticmethod
-    def _rtde_recv_line(sock: socket.socket) -> str:
-        buf = b""
-        try:
-            while b"\n" not in buf:
-                chunk = sock.recv(256)
-                if not chunk:
-                    break
-                buf += chunk
-        except socket.timeout:
-            pass
-        return buf.decode("ascii", errors="replace").strip()
-
-    def _rtde_read_loop(self, sock: socket.socket):
-        """Read and parse RTDE binary data packages."""
+    def _sec_read_loop(self, sock: socket.socket):
+        """Read RobotState messages from port 30002 and parse sub-packages."""
         buf = b""
         while self._running:
             try:
@@ -373,58 +324,107 @@ class ArmController(RobotModule):
                 if not chunk:
                     break
                 buf += chunk
-                # RTDE binary package: [2B size (BE uint16)] [1B type] [data]
-                while len(buf) >= 3:
-                    pkg_size = struct.unpack(">H", buf[0:2])[0]
-                    if pkg_size < 3:
-                        buf = buf[1:]  # lost sync
-                        continue
-                    if len(buf) < pkg_size:
-                        break
-                    pkg_type = buf[2]
-                    data = buf[3:pkg_size]
-                    buf = buf[pkg_size:]
-                    if pkg_type == 0 and len(data) >= self.RTDE_PKG_DATA_LEN:
-                        self._parse_rtde_data(data)
+                buf = self._sec_parse(buf)
             except socket.timeout:
                 pass
             except OSError:
                 break
 
-    def _parse_rtde_data(self, data: bytes):
-        """Parse RTDE binary data using the known recipe layout (all BE doubles)."""
+    def _sec_parse(self, buf: bytes) -> bytes:
+        """Extract and parse RobotState (type 16) messages. Returns leftover buf."""
+        MIN_HDR = 5
+        while len(buf) >= MIN_HDR:
+            pkg_len = struct.unpack("!i", buf[0:4])[0]
+            if pkg_len < MIN_HDR or pkg_len > 2000:
+                buf = buf[1:]  # lost sync
+                continue
+            if len(buf) < pkg_len:
+                break  # incomplete
+            pkg_type = buf[4]
+            body = buf[5:pkg_len]
+            buf = buf[pkg_len:]
+            if pkg_type == 16:
+                self._parse_robot_state_body(body)
+        return buf
+
+    def _parse_robot_state_body(self, body: bytes):
+        """Parse sub-packages from a RobotState message body."""
+        off = 0
+        while off + 5 <= len(body):
+            sub_len = struct.unpack("!i", body[off:off+4])[0]
+            if sub_len < 5 or sub_len > 1500 or off + sub_len > len(body):
+                break
+            sub_type = body[off + 4]
+            sub_data = body[off + 5:off + sub_len]
+
+            if sub_type == 1:  # JOINT_DATA
+                self._parse_joint_data(body[off:off + sub_len])
+            elif sub_type == 0:  # ROBOT_MODE_DATA
+                self._parse_robot_mode_data(body[off:off + sub_len])
+
+            off += sub_len
+
+    def _parse_joint_data(self, raw: bytes):
+        """Parse JOINT_DATA sub-package using the correct mixed double/float format."""
+        if len(raw) < self.JOINT_FMT_SIZE:
+            return
         try:
-            actual_q_rad = struct.unpack(">6d", data[0:48])
-            actual_current = struct.unpack(">6d", data[48:96])
-            joint_temps = struct.unpack(">6d", data[96:144])
-            robot_mode_raw = struct.unpack(">d", data[144:152])[0]
-            safety_mode_raw = struct.unpack(">d", data[152:160])[0]
+            vals = struct.unpack(self.JOINT_FMT, raw[:self.JOINT_FMT_SIZE])
         except struct.error:
             return
-
-        q_deg = [math.degrees(v) for v in actual_q_rad]
-
-        # Map robot_mode integer to string
-        mode_map = {
-            0: "NO_CONTROLLER", 1: "DISCONNECTED", 2: "CONFIRM_SAFETY",
-            3: "BOOTING", 4: "POWER_OFF", 5: "POWER_ON", 6: "IDLE",
-            7: "BACKDRIVE", 8: "RUNNING", 9: "UPDATING_FIRMWARE",
-        }
-        safety_map = {
-            0: "NORMAL", 1: "REDUCED", 2: "PROTECTIVE_STOP",
-            3: "RECOVERY", 4: "SAFEGUARD_STOP", 5: "SYSTEM_EMERGENCY_STOP",
-            6: "ROBOT_EMERGENCY_STOP", 7: "VIOLATION", 8: "FAULT",
-            9: "VALIDATE_JOINT_ID", 10: "UNDEFINED_SAFETY_MODE",
-        }
+        # vals layout: size, type, then 8 fields per joint x 6 joints = 48 more
+        q_actual = [vals[2 + j * 8] for j in range(6)]       # doubles: rad
+        I_actual = [vals[2 + j * 8 + 3] for j in range(6)]   # floats: A
+        V_actual = [vals[2 + j * 8 + 4] for j in range(6)]   # floats: V
+        T_motor = [vals[2 + j * 8 + 5] for j in range(6)]    # floats: C
+        joint_modes = [vals[2 + j * 8 + 7] for j in range(6)]  # uint8
 
         with self._lock:
-            self._state.joint_actual_deg = q_deg
-            self._state.joint_currents_a = list(actual_current)
-            self._state.joint_temps_c = list(joint_temps)
-            self._state.robot_mode = mode_map.get(int(robot_mode_raw), f"MODE_{int(robot_mode_raw)}")
-            self._state.safety_mode = safety_map.get(int(safety_mode_raw), f"SAFETY_{int(safety_mode_raw)}")
-            self._state.is_enabled = int(robot_mode_raw) in (6, 8)  # IDLE, RUNNING
+            self._state.joint_actual_deg = [math.degrees(v) for v in q_actual]
+            self._state.joint_currents_a = list(I_actual)
+            self._state.joint_temps_c = list(T_motor)
+            self._state.joint_voltages_v = list(V_actual)
+            self._state.is_moving = any(abs(joint_modes[j]) > 1 for j in range(6))
             self._check_collision()
+
+    def _parse_robot_mode_data(self, raw: bytes):
+        """Parse ROBOT_MODE_DATA sub-package for robot/safety mode."""
+        if len(raw) < 38:
+            return
+        try:
+            vals = struct.unpack(self.RM_FMT_V3, raw[:38])
+        except struct.error:
+            return
+        # vals: size, type, timestamp, isConnected, isEnabled, isPowerOn,
+        #       isEmergencyStopped, isSecurityStopped, isProgramRunning,
+        #       isProgramPaused, robotMode, controlMode, speedFraction
+        robot_mode_int = vals[9]  # bool but stored as byte in struct
+        is_enabled = vals[4]      # isRealRobotEnabled
+        is_estopped = vals[6]     # isEmergencyStopped
+        is_sec_stopped = vals[7]  # isSecurityStopped
+        is_power_on = vals[5]     # isPowerOnRobot
+
+        mode_names = {
+            -1: "NO_CONTROLLER", 0: "DISCONNECTED", 1: "CONFIRM_SAFETY",
+            2: "BOOTING", 3: "POWER_OFF", 4: "POWER_ON", 5: "IDLE",
+            6: "BACKDRIVE", 7: "RUNNING", 8: "UPDATING_FIRMWARE",
+        }
+        robot_mode = mode_names.get(robot_mode_int, f"MODE_{robot_mode_int}")
+
+        with self._lock:
+            self._state.robot_mode = robot_mode
+            self._state.is_enabled = bool(is_enabled) and bool(is_power_on)
+            self._state.is_fault = bool(is_estopped) or bool(is_sec_stopped)
+            if self._state.is_fault:
+                if is_estopped:
+                    self._state.fault_text = "急停"
+                elif is_sec_stopped:
+                    self._state.fault_text = "安全停止"
+            elif robot_mode == "POWER_OFF":
+                self._state.is_moving = False
+                self._state.fault_text = ""
+            else:
+                self._state.fault_text = ""
 
     def _check_collision(self):
         """Software-level collision detection based on current monitoring.
