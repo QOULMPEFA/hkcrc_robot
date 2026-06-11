@@ -21,7 +21,16 @@ from functools import wraps
 from flask import session, redirect, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
 
+import i18n
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
+
+def _lang():
+    """Return language from Flask session, default zh."""
+    try:
+        return session.get("lang", "zh")
+    except RuntimeError:
+        return "zh"
 
 ROLE_LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
 
@@ -87,7 +96,7 @@ def create_user(username: str, password: str) -> tuple[bool, str]:
             )
             return True, ""
         except sqlite3.IntegrityError:
-            return False, "用户名已存在"
+            return False, i18n.t("username_exists", _lang())
 
 
 def check_password(username: str, password: str):

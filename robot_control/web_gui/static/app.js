@@ -4,27 +4,29 @@ const ROLE = document.body.dataset.role || "viewer";
 
 // ── module metadata ──────────────────────────────────────────────────────────
 const MODULE_META = {
-  camera: { icon: "📷", name: "摄像头", stub: false },
-  ugv:    { icon: "🛞", name: "UGV 底盘", stub: false },
-  lift:   { icon: "↕",  name: "升降平台", stub: false },
-  arm:    { icon: "🦾", name: "机械臂", stub: false },
-  hand:   { icon: "🤖", name: "灵巧手", stub: false },
-  motor:  { icon: "⚙",  name: "电机控制", stub: false },
+  camera: { icon: "📷", name: "摄像头", i18nKey: "module.camera", stub: false },
+  ugv:    { icon: "🛞", name: "UGV 底盘", i18nKey: "module.ugv",    stub: false },
+  lift:   { icon: "↕",  name: "升降平台", i18nKey: "module.lift",   stub: false },
+  arm:    { icon: "🦾", name: "机械臂",   i18nKey: "module.arm",    stub: false },
+  hand:   { icon: "🤖", name: "灵巧手",   i18nKey: "module.hand",   stub: false },
+  motor:  { icon: "⚙",  name: "电机控制", i18nKey: "module.motor",  stub: false },
 };
+function _modName(meta) { return meta.i18nKey ? I18n.t(meta.i18nKey) : meta.name; }
 let ACTIVE_MODULES = [];
 
 const el  = (id) => document.getElementById(id);
 const fmt = (v, d = 2) => (typeof v === "number" ? v.toFixed(d) : "—");
 
 // ── Socket ───────────────────────────────────────────────────────────────────
-const socket = io({ transports: ["websocket"] });
+I18n.init();
+const socket = io({ transports: ["websocket"], query: { lang: I18n._lang } });
 
 const connBadge = el("conn-badge");
 socket.on("connect", () => {
-  if (connBadge) { connBadge.textContent = "Connected"; connBadge.className = "badge connected"; }
+  if (connBadge) { connBadge.textContent = I18n.t("header.connected"); connBadge.className = "badge connected"; }
 });
 socket.on("disconnect", () => {
-  if (connBadge) { connBadge.textContent = "Disconnected"; connBadge.className = "badge disconnected"; }
+  if (connBadge) { connBadge.textContent = I18n.t("header.disconnected"); connBadge.className = "badge disconnected"; }
 });
 socket.on("redirect", (data) => { window.location.href = data.url; });
 
@@ -44,13 +46,14 @@ function _renderSidebar() {
   if (!list) return;
   list.innerHTML = "";
   ACTIVE_MODULES.forEach((mod) => {
-    const meta = MODULE_META[mod] || { icon: "❓", name: mod, stub: false };
+    const meta = MODULE_META[mod] || { icon: "❓", name: mod, i18nKey: null, stub: false };
     const isOpen = PanelManager.isOpen(mod);
     const item = document.createElement("div");
     item.className = "module-item" + (isOpen ? " active" : "") + (meta.stub ? " stub-module" : "");
+    const stubTag = meta.stub ? `<span class="stub-tag">${I18n.t("sidebar.sdk_stub")}</span>` : '';
     item.innerHTML = `
       <span class="module-icon">${meta.icon}</span>
-      <span class="module-name">${meta.name}${meta.stub ? '<span class="stub-tag">SDK待接入</span>' : ''}</span>
+      <span class="module-name">${_modName(meta)}${stubTag}</span>
       <span class="module-status" id="mod-status-${mod}"></span>
     `;
     if (!isOpen) {
@@ -86,7 +89,7 @@ const PanelManager = {
   open(module, size) {
     size = size || "medium";
     const id = `panel-${module}-${++this._counter}`;
-    const meta = MODULE_META[module] || { icon: "❓", name: module };
+    const meta = MODULE_META[module] || { icon: "❓", name: module, i18nKey: null };
 
     const panel = document.createElement("div");
     panel.className = `panel size-${size}`;
@@ -96,7 +99,7 @@ const PanelManager = {
     panel.innerHTML = `
       <div class="panel-header" data-panel-id="${id}">
         <span class="panel-icon">${meta.icon}</span>
-        <span class="panel-title">${meta.name}</span>
+        <span class="panel-title">${_modName(meta)}</span>
         <span class="panel-status" id="${id}-status"></span>
         <div class="panel-actions">
           <button class="panel-btn panel-size" title="切换大小" data-action="resize">⛶</button>
@@ -217,7 +220,7 @@ const PanelManager = {
       if (p.module === module) {
         const st = el(`${id}-status`);
         if (st) {
-          st.textContent = connected ? (isFault ? "⚠ 故障" : "✓ 在线") : "✗ 离线";
+          st.textContent = connected ? (isFault ? I18n.t("status.fault") : I18n.t("status.online")) : I18n.t("status.offline");
           st.style.color = connected ? (isFault ? "var(--warn)" : "var(--accent2)") : "var(--danger)";
         }
       }
@@ -356,7 +359,7 @@ const LayoutManager = {
   },
 
   save(name) {
-    if (!name) { alert("请输入布局名称"); return; }
+    if (!name) { alert(I18n.t("layout.prompt_name")); return; }
     this._layouts[name] = {
       ...PanelManager.getLayout(),
       savedAt: new Date().toISOString(),
@@ -375,7 +378,7 @@ const LayoutManager = {
   },
 
   delete(name) {
-    if (!confirm(`删除布局 "${name}"？`)) return;
+    if (!confirm(I18n.t("layout.confirm_delete", [name]))) return;
     delete this._layouts[name];
     this._persist();
     this.populateSelector();
@@ -389,7 +392,7 @@ const LayoutManager = {
     const sel = el("layout-selector");
     if (!sel) return;
     const current = sel.value;
-    sel.innerHTML = '<option value="">— 选择布局 —</option>';
+    sel.innerHTML = `<option value="">${I18n.t("header.select_layout")}</option>`;
     Object.keys(this._layouts).sort().forEach((name) => {
       const opt = document.createElement("option");
       opt.value = name;
@@ -415,7 +418,7 @@ const LayoutManager = {
 function _renderPanelContent(panelId, module) {
   const body = el(panelId + "-body");
   if (!body) return;
-  body.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px">加载中...</div>';
+  body.innerHTML = `<div style="color:var(--muted);text-align:center;padding:20px">${I18n.t("misc.loading")}</div>`;
 
   switch (module) {
     case "camera": _renderCameraPanel(panelId, body); break;
@@ -424,7 +427,7 @@ function _renderPanelContent(panelId, module) {
     case "arm":    _renderArmPanel(panelId, body); break;
     case "hand":   _renderHandPanel(panelId, body); break;
     case "motor":  _renderMotorPanel(panelId, body); break;
-    default:       body.innerHTML = `<div style="color:var(--muted);padding:20px;text-align:center">模块 "${module}" 无 UI</div>`; break;
+    default:       body.innerHTML = `<div style="color:var(--muted);padding:20px;text-align:center">${I18n.t("misc.no_ui", [module])}</div>`; break;
   }
 }
 
@@ -444,9 +447,9 @@ function _renderCameraPanel(panelId, body) {
   body.innerHTML = `
     <div class="camera-wrap" id="${panelId}-cam-wrap">
       <img id="${panelId}-cam-img" src="/stream" alt="camera" />
-      <div class="camera-error" id="${panelId}-cam-err" style="display:none">摄像头未连接</div>
+      <div class="camera-error" id="${panelId}-cam-err" style="display:none">${I18n.t("camera.offline")}</div>
     </div>
-    <div class="cam-status-line" id="${panelId}-cam-status">MJPEG</div>
+    <div class="cam-status-line" id="${panelId}-cam-status">${I18n.t("camera.status")}</div>
   `;
 
   const img = el(panelId + "-cam-img");
@@ -507,21 +510,22 @@ document.addEventListener("keyup", (e) => {
 
 
 function _renderUgvPanel(panelId, body) {
+  const t = (k) => I18n.t(k);
   body.innerHTML = `
     <div class="status-row">
-      <span>连接：<b id="${panelId}-ugv-connected">—</b></span>
-      <span>电池：<b id="${panelId}-ugv-battery">—</b> V</span>
-      <span>SOC：<b id="${panelId}-ugv-soc">—</b>%</span>
-      <span>线速度：<b id="${panelId}-ugv-linear">—</b></span>
-      <span>角速度：<b id="${panelId}-ugv-angular">—</b></span>
+      <span>${t("ugv.connection")}<b id="${panelId}-ugv-connected">—</b></span>
+      <span>${t("ugv.battery")}<b id="${panelId}-ugv-battery">—</b> V</span>
+      <span>${t("ugv.soc")}<b id="${panelId}-ugv-soc">—</b>%</span>
+      <span>${t("ugv.linear_vel")}<b id="${panelId}-ugv-linear">—</b></span>
+      <span>${t("ugv.angular_vel")}<b id="${panelId}-ugv-angular">—</b></span>
     </div>
     <div class="btn-row">
-      <button class="btn-primary ctrl"    id="${panelId}-ugv-enable">使能 CAN 模式</button>
-      <button class="btn-warn ctrl"       id="${panelId}-ugv-reset">清除故障</button>
-      <button class="btn-secondary"       id="${panelId}-restart-can">重启 CAN</button>
+      <button class="btn-primary ctrl"    id="${panelId}-ugv-enable">${t("ugv.enable_can")}</button>
+      <button class="btn-warn ctrl"       id="${panelId}-ugv-reset">${t("ugv.clear_fault")}</button>
+      <button class="btn-secondary"       id="${panelId}-restart-can">${t("ugv.restart_can")}</button>
     </div>
     <div id="${panelId}-ugv-disabled-msg" style="text-align:center;padding:20px;color:var(--warn);font-size:14px">
-      ⚠ 底盘处于<b>待机模式</b> — 点击<em>「使能 CAN 模式」</em>后可控制
+      ${t("ugv.standby_warn")}
     </div>
     <div id="${panelId}-ugv-controls" style="display:none">
       <div class="dpad">
@@ -532,21 +536,21 @@ function _renderUgvPanel(panelId, body) {
         <button class="dpad-btn ctrl" data-l="-1.0" data-a="0.0">▼</button>
       </div>
       <div style="text-align:center;color:var(--muted);font-size:11px;margin:8px 0">
-        ⌨ 键盘: <b>W</b>前 <b>S</b>后 <b>A</b>左 <b>D</b>右 — 组合键支持斜面移动
+        ${t("ugv.wasd_hint")}
       </div>
       <div class="slider-row">
-        <label>线速度 <span id="${panelId}-lbl-linear">0.5</span> m/s
+        <label>${t("ugv.linear")} <span id="${panelId}-lbl-linear">0.5</span> m/s
           <input type="range" id="${panelId}-sl-linear" min="0.1" max="1.5" step="0.1" value="0.5" />
         </label>
-        <label>角速度 <span id="${panelId}-lbl-angular">0.5</span> rad/s
+        <label>${t("ugv.angular")} <span id="${panelId}-lbl-angular">0.5</span> rad/s
           <input type="range" id="${panelId}-sl-angular" min="0.1" max="1.0" step="0.1" value="0.5" />
         </label>
       </div>
     </div>
     <div class="panel-diag">
-      <span>车辆状态: <b id="${panelId}-ugv-vehicle-state">—</b></span>
-      <span>控制模式: <b id="${panelId}-ugv-control-mode">—</b></span>
-      <button id="${panelId}-btn-toggle-ugv-log" class="btn-sm">运行日志 ▾</button>
+      <span>${t("ugv.vehicle_state")}<b id="${panelId}-ugv-vehicle-state">—</b></span>
+      <span>${t("ugv.control_mode")}<b id="${panelId}-ugv-control-mode">—</b></span>
+      <button id="${panelId}-btn-toggle-ugv-log" class="btn-sm">${t("ugv.log_toggle")}</button>
     </div>
     <div class="panel-log" id="${panelId}-ugv-log-panel"></div>
   `;
@@ -591,7 +595,7 @@ function _renderUgvPanel(panelId, body) {
   const btnCan = el(panelId + "-restart-can");
   if (btnCan) {
     btnCan.addEventListener("click", () => {
-      btnCan.disabled = true; btnCan.textContent = "重启中...";
+      btnCan.disabled = true; btnCan.textContent = I18n.t("ugv.restarting");
       socket.emit("restart_can");
     });
   }
@@ -600,7 +604,7 @@ function _renderUgvPanel(panelId, body) {
   const btnLog = el(panelId + "-btn-toggle-ugv-log");
   const logPanel = el(panelId + "-ugv-log-panel");
   if (btnLog && logPanel) {
-    btnLog.addEventListener("click", () => _togglePanelLog(logPanel, btnLog, "运行日志"));
+    btnLog.addEventListener("click", () => _togglePanelLog(logPanel, btnLog, I18n.t("ugv.log_label")));
   }
 
   // store refs for state update
@@ -609,32 +613,33 @@ function _renderUgvPanel(panelId, body) {
 
 // ── Lift Panel ────────────────────────────────────────────────────────────────
 function _renderLiftPanel(panelId, body) {
+  const t = (k) => I18n.t(k);
   body.innerHTML = `
     <div class="status-row">
-      <span>高度：<b id="${panelId}-lift-height">—</b> mm</span>
-      <span>速度：<b id="${panelId}-lift-vel">—</b> mm/s</span>
-      <span>转矩：<b id="${panelId}-lift-torque">—</b> ‰</span>
+      <span>${t("lift.height")}<b id="${panelId}-lift-height">—</b> mm</span>
+      <span>${t("lift.velocity")}<b id="${panelId}-lift-vel">—</b> mm/s</span>
+      <span>${t("lift.torque")}<b id="${panelId}-lift-torque">—</b> ‰</span>
       <span id="${panelId}-lift-fault-badge" class="badge fault" style="display:none">FAULT</span>
     </div>
     <div class="input-row">
-      <label>目标高度 (mm)
+      <label>${t("lift.target_mm")}
         <input type="number" id="${panelId}-lift-target" min="-9999" max="9999" step="10" value="200" />
       </label>
-      <label>速度 (mm/s)
+      <label>${t("lift.speed_mm_s")}
         <input type="number" id="${panelId}-lift-speed" min="1" max="50" step="1" value="10" />
       </label>
     </div>
     <div class="btn-row">
-      <button class="btn-primary ctrl"   id="${panelId}-lift-move">移动</button>
-      <button class="btn-secondary ctrl" id="${panelId}-lift-stop">停止</button>
-      <button class="btn-secondary ctrl" id="${panelId}-lift-home">回零</button>
-      <button class="btn-warn ctrl"      id="${panelId}-lift-reset">清除故障</button>
+      <button class="btn-primary ctrl"   id="${panelId}-lift-move">${t("lift.move")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-lift-stop">${t("lift.stop")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-lift-home">${t("lift.home")}</button>
+      <button class="btn-warn ctrl"      id="${panelId}-lift-reset">${t("lift.reset_fault")}</button>
     </div>
     <div class="btn-row" id="${panelId}-lift-presets"></div>
     <div class="panel-diag">
-      <span>驱动器: <b id="${panelId}-lift-drive-state">—</b></span>
-      <span>SW: <b id="${panelId}-lift-sw">—</b></span>
-      <button id="${panelId}-btn-toggle-lift-log" class="btn-sm">运行日志 ▾</button>
+      <span>${t("lift.drive")}<b id="${panelId}-lift-drive-state">—</b></span>
+      <span>${t("lift.sw")}<b id="${panelId}-lift-sw">—</b></span>
+      <button id="${panelId}-btn-toggle-lift-log" class="btn-sm">${t("lift.log_toggle")}</button>
     </div>
     <div class="panel-log" id="${panelId}-lift-log-panel"></div>
   `;
@@ -660,7 +665,7 @@ function _renderLiftPanel(panelId, body) {
 
   const btnLog = el(panelId + "-btn-toggle-lift-log");
   const logPanel = el(panelId + "-lift-log-panel");
-  if (btnLog && logPanel) btnLog.addEventListener("click", () => _togglePanelLog(logPanel, btnLog, "运行日志"));
+  if (btnLog && logPanel) btnLog.addEventListener("click", () => _togglePanelLog(logPanel, btnLog, I18n.t("lift.log_label")));
 }
 
 function _rebuildPresetsFor(panelId, minMm, maxMm) {
@@ -687,34 +692,35 @@ function _rebuildPresetsFor(panelId, minMm, maxMm) {
 
 // ── Arm Panel ─────────────────────────────────────────────────────────────────
 function _renderArmPanel(panelId, body) {
+  const t = (k) => I18n.t(k);
   body.innerHTML = `
     <div class="status-row">
-      <span>连接：<b id="${panelId}-arm-connected">—</b></span>
-      <span>使能：<b id="${panelId}-arm-enabled">—</b></span>
-      <span>运动中：<b id="${panelId}-arm-moving">—</b></span>
-      <span>模式：<b id="${panelId}-arm-robot-mode">—</b></span>
-      <span>安全：<b id="${panelId}-arm-safety-mode">—</b></span>
+      <span>${t("arm.connection")}<b id="${panelId}-arm-connected">—</b></span>
+      <span>${t("arm.enabled")}<b id="${panelId}-arm-enabled">—</b></span>
+      <span>${t("arm.moving")}<b id="${panelId}-arm-moving">—</b></span>
+      <span>${t("arm.mode")}<b id="${panelId}-arm-robot-mode">—</b></span>
+      <span>${t("arm.safety")}<b id="${panelId}-arm-safety-mode">—</b></span>
       <span id="${panelId}-arm-fault-badge" class="badge fault" style="display:none">FAULT</span>
     </div>
     <div class="slider-row">
-      <label>运动速度 <span id="${panelId}-lbl-arm-speed">20</span>%
+      <label>${t("arm.speed_pct")} <span id="${panelId}-lbl-arm-speed">20</span>%
         <input type="range" id="${panelId}-sl-arm-speed" min="1" max="100" step="1" value="20" />
       </label>
-      <label>碰撞检测 <span id="${panelId}-lbl-arm-cs">0.30</span>
+      <label>${t("arm.collision")} <span id="${panelId}-lbl-arm-cs">0.30</span>
         <input type="range" id="${panelId}-sl-arm-cs" min="0.05" max="1.0" step="0.05" value="0.30" />
       </label>
     </div>
     <div id="${panelId}-arm-collision-warn" class="collision-warn" style="display:none"></div>
     <div class="joint-grid" id="${panelId}-arm-joints"></div>
     <div class="btn-row">
-      <button class="btn-primary ctrl"   id="${panelId}-arm-enable">使能</button>
-      <button class="btn-secondary ctrl" id="${panelId}-arm-disable">断开动力</button>
-      <button class="btn-primary ctrl"   id="${panelId}-arm-home">回零</button>
-      <button class="btn-secondary ctrl" id="${panelId}-arm-stop">停止</button>
-      <button class="btn-warn ctrl"      id="${panelId}-arm-reset">解除保护性停止</button>
+      <button class="btn-primary ctrl"   id="${panelId}-arm-enable">${t("arm.enable")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-arm-disable">${t("arm.disable")}</button>
+      <button class="btn-primary ctrl"   id="${panelId}-arm-home">${t("arm.home")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-arm-stop">${t("arm.stop")}</button>
+      <button class="btn-warn ctrl"      id="${panelId}-arm-reset">${t("arm.reset")}</button>
     </div>
     <div class="panel-diag">
-      <button id="${panelId}-btn-toggle-arm-log" class="btn-sm">运行日志 ▾</button>
+      <button id="${panelId}-btn-toggle-arm-log" class="btn-sm">${t("arm.log_toggle")}</button>
     </div>
     <div class="panel-log" id="${panelId}-arm-log-panel"></div>
   `;
@@ -740,7 +746,7 @@ function _renderArmPanel(panelId, body) {
         <input type="range" id="${panelId}-arm-j${i}" min="-180" max="180" step="1" value="0" />
         <button class="dpad-btn" style="width:28px;height:28px;font-size:14px;margin-left:2px" data-j="${i}" data-d="5">▶</button>
         <span class="val" id="${panelId}-arm-j${i}-val">0.0°</span>
-        <span class="joint-actual" id="${panelId}-arm-j${i}-act">实 —</span>
+        <span class="joint-actual" id="${panelId}-arm-j${i}-act">${t("arm.actual_prefix")}—</span>
         <span class="joint-load" id="${panelId}-arm-j${i}-load">— A</span>
         <span class="joint-temp" id="${panelId}-arm-j${i}-temp">— °C</span>
       `;
@@ -810,33 +816,34 @@ function _renderArmPanel(panelId, body) {
 
   const btnLog = el(panelId + "-btn-toggle-arm-log");
   const logPanel = el(panelId + "-arm-log-panel");
-  if (btnLog && logPanel) btnLog.addEventListener("click", () => _togglePanelLog(logPanel, btnLog, "运行日志"));
+  if (btnLog && logPanel) btnLog.addEventListener("click", () => _togglePanelLog(logPanel, btnLog, I18n.t("arm.log_label")));
 }
 
 // ── Hand Panel ────────────────────────────────────────────────────────────────
 function _renderHandPanel(panelId, body) {
+  const t = (k) => I18n.t(k);
   body.innerHTML = `
     <div class="status-row">
-      <span>状态：<b id="${panelId}-hand-enabled">—</b></span>
-      <span>夹持力：<b id="${panelId}-hand-force">—</b> N</span>
+      <span>${t("hand.status")}<b id="${panelId}-hand-enabled">—</b></span>
+      <span>${t("hand.force")}<b id="${panelId}-hand-force">—</b> N</span>
     </div>
     <div class="finger-grid" id="${panelId}-hand-fingers"></div>
     <div class="btn-row">
-      <button class="btn-primary ctrl"   id="${panelId}-hand-open">张开</button>
-      <button class="btn-primary ctrl"   id="${panelId}-hand-close">握拳</button>
-      <button class="btn-secondary ctrl" id="${panelId}-hand-pinch">捏取</button>
-      <button class="btn-secondary ctrl" id="${panelId}-hand-send">发送</button>
+      <button class="btn-primary ctrl"   id="${panelId}-hand-open">${t("hand.open")}</button>
+      <button class="btn-primary ctrl"   id="${panelId}-hand-close">${t("hand.close")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-hand-pinch">${t("hand.pinch")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-hand-send">${t("hand.send")}</button>
     </div>
   `;
 
-  const FINGERS = ["拇指", "食指", "中指", "无名指", "小指"];
+  const FINGERS = ["hand.finger.0", "hand.finger.1", "hand.finger.2", "hand.finger.3", "hand.finger.4"];
   const grid = el(panelId + "-hand-fingers");
   if (grid) {
-    FINGERS.forEach((name, i) => {
+    FINGERS.forEach((key, i) => {
       const row = document.createElement("div");
       row.className = "finger-row";
       row.innerHTML = `
-        <label>${name}</label>
+        <label>${t(key)}</label>
         <input type="range" id="${panelId}-hand-f${i}" min="0" max="1" step="0.01" value="0" />
         <span class="val" id="${panelId}-hand-f${i}-val">0%</span>
       `;
@@ -865,10 +872,11 @@ function _renderHandPanel(panelId, body) {
 
 // ── Motor Panel ────────────────────────────────────────────────────────────────
 function _renderMotorPanel(panelId, body) {
+  const t = (k) => I18n.t(k);
   body.innerHTML = `
     <div class="status-row">
-      <span>状态：<b id="${panelId}-motor-connected">—</b></span>
-      <span>方向：<b id="${panelId}-motor-direction">停止</b></span>
+      <span>${t("hand.status")}<b id="${panelId}-motor-connected">—</b></span>
+      <span>${t("motor.direction")}<b id="${panelId}-motor-direction">${t("motor.stop")}</b></span>
     </div>
     <div class="dpad motor-dpad">
       <button class="dpad-btn ctrl" data-dir="forward">▲</button>
@@ -910,10 +918,10 @@ function _renderMotorPanel(panelId, body) {
 }
 
 function _updateMotorState(panelId, s) {
-  _maybeSet(el(panelId + "-motor-connected"), s.connected ? "已连接" : "mock");
+  _maybeSet(el(panelId + "-motor-connected"), s.connected ? I18n.t("motor.connected") : I18n.t("motor.mock"));
   const dirEl = el(panelId + "-motor-direction");
   if (dirEl) {
-    const labels = { forward: "前进", backward: "后退", left: "左转", right: "右转", stop: "停止" };
+    const labels = { forward: I18n.t("motor.forward"), backward: I18n.t("motor.backward"), left: I18n.t("motor.left"), right: I18n.t("motor.right"), stop: I18n.t("motor.stop") };
     dirEl.textContent = labels[s.direction] || s.direction;
     dirEl.style.color = s.direction !== "stop" ? "var(--accent2)" : "var(--muted)";
   }
@@ -964,25 +972,25 @@ socket.on("robot_state", (s) => {
     }
   });
 
-  _maybeSet(el("last-update"), "最后更新：" + new Date().toLocaleTimeString());
+  _maybeSet(el("last-update"), I18n.t("misc.last_update") + new Date().toLocaleTimeString());
 });
 
 function _updateUgvState(panelId, s) {
-  _maybeSet(el(panelId + "-ugv-connected"), s.connected ? "✓ 已连接" : "✗ 未连接");
+  _maybeSet(el(panelId + "-ugv-connected"), s.connected ? I18n.t("ugv.connected") : I18n.t("ugv.disconnected"));
   _maybeSet(el(panelId + "-ugv-battery"), fmt(s.battery_voltage, 1));
   _maybeSet(el(panelId + "-ugv-linear"), fmt(s.linear_velocity));
   _maybeSet(el(panelId + "-ugv-angular"), fmt(s.angular_velocity));
   _maybeSet(el(panelId + "-ugv-soc"), s.bms_soc != null ? s.bms_soc : "—");
   const vsEl = el(panelId + "-ugv-vehicle-state");
   if (vsEl) {
-    const vsLabels = {0: "正常", 1: "急停", 2: "异常"};
+    const vsLabels = {0: I18n.t("ugv.state.normal"), 1: I18n.t("ugv.state.estop"), 2: I18n.t("ugv.state.fault")};
     vsEl.textContent = vsLabels[s.vehicle_state] || s.vehicle_state;
     vsEl.style.color = s.vehicle_state === 0 ? "#4caf50" : s.vehicle_state === 1 ? "#ff9800" : "#f44336";
   }
   const cmEl = el(panelId + "-ugv-control-mode");
   const enabled = s.control_mode === 1;
   if (cmEl) {
-    const cmLabels = {0: "待机", 1: "CAN指令", 2: "UART", 3: "遥控器"};
+    const cmLabels = {0: I18n.t("ugv.mode.standby"), 1: I18n.t("ugv.mode.can"), 2: I18n.t("ugv.mode.uart"), 3: I18n.t("ugv.mode.remote")};
     cmEl.textContent = cmLabels[s.control_mode] || s.control_mode;
     cmEl.style.color = enabled ? "#4caf50" : s.control_mode === 0 ? "#f44336" : "#ff9800";
   }
@@ -994,8 +1002,8 @@ function _updateUgvState(panelId, s) {
   // Enable button state
   const btnEn = el(panelId + "-ugv-enable");
   if (btnEn) {
-    if (enabled) { btnEn.textContent = "✓ 已使能 (CAN指令)"; btnEn.disabled = true; btnEn.style.opacity = "0.6"; }
-    else        { btnEn.textContent = "使能 CAN 模式"; btnEn.disabled = false; btnEn.style.opacity = ""; }
+    if (enabled) { btnEn.textContent = I18n.t("ugv.enabled"); btnEn.disabled = true; btnEn.style.opacity = "0.6"; }
+    else        { btnEn.textContent = I18n.t("ugv.enable_can"); btnEn.disabled = false; btnEn.style.opacity = ""; }
   }
   // Keyboard WASD: start when enabled, stop when disabled
   if (enabled && PanelManager.isOpen("ugv")) {
@@ -1031,9 +1039,9 @@ function _updateLiftState(panelId, s) {
 }
 
 function _updateArmState(panelId, s) {
-  _maybeSet(el(panelId + "-arm-connected"), s.connected ? "已连接" : "未连接");
-  _maybeSet(el(panelId + "-arm-enabled"), s.is_enabled ? "已使能" : "未使能");
-  _maybeSet(el(panelId + "-arm-moving"), s.is_moving ? "运动中" : "静止");
+  _maybeSet(el(panelId + "-arm-connected"), s.connected ? I18n.t("arm.connected") : I18n.t("arm.disconnected"));
+  _maybeSet(el(panelId + "-arm-enabled"), s.is_enabled ? I18n.t("arm.enabled_yes") : I18n.t("arm.enabled_no"));
+  _maybeSet(el(panelId + "-arm-moving"), s.is_moving ? I18n.t("arm.moving_yes") : I18n.t("arm.moving_no"));
   _maybeSet(el(panelId + "-arm-robot-mode"), s.robot_mode || "—");
   _maybeSet(el(panelId + "-arm-safety-mode"), s.safety_mode || "—");
   const smEl = el(panelId + "-arm-safety-mode");
@@ -1082,7 +1090,7 @@ function _updateArmState(panelId, s) {
     s.joint_actual_deg.forEach((angle, i) => {
       const actEl = el(panelId + `-arm-j${i}-act`);
       if (actEl) {
-        actEl.textContent = "实 " + fmt(angle, 1) + "°";
+        actEl.textContent = I18n.t("arm.actual_prefix") + fmt(angle, 1) + "°";
         // Color-code: green if close to commanded, yellow if diverging
         const cmd = (s.joint_angles_deg || [])[i] || 0;
         const diff = Math.abs(angle - cmd);
@@ -1117,7 +1125,7 @@ function _updateArmState(panelId, s) {
 }
 
 function _updateHandState(panelId, s) {
-  _maybeSet(el(panelId + "-hand-enabled"), s.is_enabled ? "已使能" : "未使能");
+  _maybeSet(el(panelId + "-hand-enabled"), s.is_enabled ? I18n.t("hand.enabled") : I18n.t("hand.disabled"));
   _maybeSet(el(panelId + "-hand-force"), fmt(s.grip_force_n, 1));
   if (s.finger_positions) {
     s.finger_positions.forEach((pos, i) => {
@@ -1170,7 +1178,7 @@ function _checkEmptyState() {
   if (!hasPanels && !emptyEl) {
     emptyEl = document.createElement("div");
     emptyEl.className = "canvas-empty";
-    emptyEl.innerHTML = "<span>点击右侧硬件模块打开控制面板</span>";
+    emptyEl.innerHTML = "<span>" + I18n.t("sidebar.empty_hint") + "</span>";
     canvas.appendChild(emptyEl);
   } else if (hasPanels && emptyEl) {
     emptyEl.remove();
@@ -1205,13 +1213,13 @@ const btnPowerCancel2 = el("btn-power-cancel2");
 function _showPowerConfirm(action) {
   _powerAction = action;
   if (action === "reboot") {
-    powerTitle.textContent = "确认重启";
-    powerMsg.textContent = "确定要重启系统吗？重启后请等待约 30 秒重新连接。";
+    powerTitle.textContent = I18n.t("power.reboot_title");
+    powerMsg.textContent = I18n.t("power.reboot_msg");
     btnPowerConfirm.style.background = "#f0c040";
     btnPowerConfirm.style.color = "#1a1a1a";
   } else {
-    powerTitle.textContent = "确认关机";
-    powerMsg.textContent = "确定要关闭系统吗？关机后需手动上电才能恢复。";
+    powerTitle.textContent = I18n.t("power.shutdown_title");
+    powerMsg.textContent = I18n.t("power.shutdown_msg");
     btnPowerConfirm.style.background = "var(--danger)";
     btnPowerConfirm.style.color = "#fff";
   }
@@ -1234,7 +1242,7 @@ if (btnPowerConfirm) {
       socket.emit("system_power", { action: _powerAction });
       _hidePowerConfirm();
       // Show brief feedback — the page may close before response arrives
-      setTimeout(() => alert("命令已发送，系统即将" + (_powerAction === "reboot" ? "重启" : "关机") + "。"), 200);
+      setTimeout(() => alert(I18n.t(_powerAction === "reboot" ? "power.reboot_sent" : "power.shutdown_sent")), 200);
     }
   });
 }
@@ -1254,7 +1262,7 @@ if (layoutSel) {
 const btnSave = el("btn-layout-save");
 if (btnSave) {
   btnSave.addEventListener("click", () => {
-    const name = prompt("布局名称：", "默认布局");
+    const name = prompt(I18n.t("layout.prompt_name"), I18n.t("layout.default_name"));
     if (name) LayoutManager.save(name.trim());
   });
 }
@@ -1289,9 +1297,9 @@ socket.on("lift_limits", (data) => {
 socket.on("restart_can_result", (r) => {
   PanelManager._panels.forEach((p, panelId) => {
     const btn = el(panelId + "-restart-can");
-    if (btn && p.module === "ugv") { btn.disabled = false; btn.textContent = r.ok ? "CAN 已重启" : "重启 CAN"; }
+    if (btn && p.module === "ugv") { btn.disabled = false; btn.textContent = r.ok ? I18n.t("ugv.can_restarted") : I18n.t("ugv.restart_can"); }
   });
-  if (!r.ok) alert(r.msg || "重启失败");
+  if (!r.ok) alert(r.msg || I18n.t("ugv.restart_failed"));
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1315,12 +1323,12 @@ if (ROLE === "admin") {
     el("btn-lift-set-limits")?.addEventListener("click", () => {
       const minVal = parseFloat(el("lift-min-mm")?.value);
       const maxVal = parseFloat(el("lift-max-mm")?.value);
-      if (isNaN(minVal) || isNaN(maxVal) || minVal >= maxVal) { alert("最小高度必须小于最大高度"); return; }
+      if (isNaN(minVal) || isNaN(maxVal) || minVal >= maxVal) { alert(I18n.t("misc.min_less_max")); return; }
       socket.emit("lift_set_limits", { min_mm: minVal, max_mm: maxVal });
     });
     el("btn-save-camera-timeout")?.addEventListener("click", () => {
       const val = parseInt(el("camera-timeout")?.value, 10);
-      if (isNaN(val) || val < 1) { alert("请输入有效的分钟数"); return; }
+      if (isNaN(val) || val < 1) { alert(I18n.t("misc.enter_valid_min")); return; }
       socket.emit("settings_set", { key: "camera_timeout_min", value: val });
     });
 
@@ -1344,14 +1352,14 @@ if (ROLE === "admin") {
         tr.innerHTML = `
           <td>${u.username}</td>
           <td><select class="role-select" data-id="${u.id}">
-            <option value="viewer" ${u.role==="viewer"?"selected":""}>观察员</option>
-            <option value="operator" ${u.role==="operator"?"selected":""}>操作员</option>
-            <option value="admin" ${u.role==="admin"?"selected":""}>管理员</option>
+            <option value="viewer" ${u.role==="viewer"?"selected":""}>${I18n.t("settings.role_viewer")}</option>
+            <option value="operator" ${u.role==="operator"?"selected":""}>${I18n.t("settings.role_operator")}</option>
+            <option value="admin" ${u.role==="admin"?"selected":""}>${I18n.t("settings.role_admin")}</option>
           </select></td>
-          <td><span class="badge ${u.status==='active'?'active':'pending'}">${u.status==='active'?'已激活':'待审批'}</span></td>
+          <td><span class="badge ${u.status==='active'?'active':'pending'}">${u.status==='active' ? I18n.t("settings.user_active") : I18n.t("settings.user_pending")}</span></td>
           <td class="user-actions">
-            ${u.status==='pending'?`<button class="btn-primary btn-sm btn-approve" data-id="${u.id}">批准</button>`:""}
-            <button class="btn-secondary btn-sm btn-delete" data-id="${u.id}">删除</button>
+            ${u.status==='pending'?`<button class="btn-primary btn-sm btn-approve" data-id="${u.id}">${I18n.t("settings.approve")}</button>`:""}
+            <button class="btn-secondary btn-sm btn-delete" data-id="${u.id}">${I18n.t("settings.delete_user")}</button>
           </td>`;
         tbody.appendChild(tr);
       });
@@ -1362,7 +1370,7 @@ if (ROLE === "admin") {
         b.addEventListener("click", () => socket.emit("admin_update_user", {id:parseInt(b.dataset.id),status:"active"}));
       });
       tbody.querySelectorAll(".btn-delete").forEach((b) => {
-        b.addEventListener("click", () => { if(confirm("确认删除该用户？")) socket.emit("admin_delete_user",{id:parseInt(b.dataset.id)}); });
+        b.addEventListener("click", () => { if(confirm(I18n.t("settings.confirm_delete"))) socket.emit("admin_delete_user",{id:parseInt(b.dataset.id)}); });
       });
     });
     socket.on("error", (data) => alert(data.msg));

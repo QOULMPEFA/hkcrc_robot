@@ -22,7 +22,7 @@
 - Workspace: `/home/orangepi/pr_mini`
 - Service: `robot_control_panel.service`
 - Sudo password: `orangepi`
-- Active modules: camera, motor, lift (pipe robot preset)
+- Active modules: camera, motor
 - Web GUI: `http://192.168.1.112:6080`
 
 ## Jetson (全尺寸机器人)

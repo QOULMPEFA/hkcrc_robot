@@ -24,6 +24,7 @@ from robot_control.robot import Robot
 # auth module lives alongside this file
 sys.path.insert(0, os.path.dirname(__file__))
 import auth
+import i18n
 
 log = logging.getLogger(__name__)
 
@@ -49,16 +50,20 @@ def _touch_activity():
 
 ROLE_LEVEL = {"viewer": 0, "operator": 1, "admin": 2}
 
+def _lang():
+    """Return the current user's language from Flask session, default zh."""
+    return session.get("lang", "zh")
+
 def _get_session_user():
     return auth.get_current_user()
 
 def _require_role(min_role: str) -> bool:
     user = _get_session_user()
     if not user:
-        emit("error", {"msg": "请先登录"})
+        emit("error", {"msg": i18n.t("login_required", _lang())})
         return False
     if ROLE_LEVEL.get(user["role"], 0) < ROLE_LEVEL[min_role]:
-        emit("error", {"msg": "权限不足"})
+        emit("error", {"msg": i18n.t("permission_denied", _lang())})
         return False
     return True
 
@@ -172,11 +177,11 @@ def login():
         password = request.form.get("password", "")
         user = auth.check_password(username, password)
         if not user:
-            error = "用户名或密码错误"
+            error = i18n.t("wrong_credentials", _lang())
         elif user["status"] == "pending":
             return redirect(url_for("login", msg="pending"))
         elif user["status"] != "active":
-            error = "账号已被禁用"
+            error = i18n.t("account_disabled", _lang())
         else:
             session["user_id"] = user["id"]
             session["username"] = user["username"]
@@ -197,13 +202,13 @@ def register():
         password = request.form.get("password", "")
         confirm  = request.form.get("confirm", "")
         if not username or not password:
-            error = "用户名和密码不能为空"
+            error = i18n.t("username_password_empty", _lang())
         elif len(username) < 2 or len(username) > 32:
-            error = "用户名长度须在 2-32 个字符之间"
+            error = i18n.t("username_length", _lang())
         elif password != confirm:
-            error = "两次输入的密码不一致"
+            error = i18n.t("password_mismatch", _lang())
         elif len(password) < 6:
-            error = "密码长度至少 6 位"
+            error = i18n.t("password_length", _lang())
         else:
             ok, err = auth.create_user(username, password)
             if ok:
@@ -259,6 +264,11 @@ def _with_role(min_role: str, handler):
 @socketio.on("connect")
 def on_connect():
     _touch_activity()
+    # Store language preference from client query param
+    from flask import request as flask_request
+    lang = flask_request.args.get("lang", "zh")
+    if lang in ("zh", "en"):
+        session["lang"] = lang
     user = _get_session_user()
     if not user:
         emit("redirect", {"url": "/login"})
@@ -266,6 +276,13 @@ def on_connect():
     log.info("[GUI] Client connected: %s (%s)", user["username"], user["role"])
     emit("connected", {"status": "ok", "role": user["role"],
                        "modules": robot.module_names if robot else []})
+
+
+@socketio.on("set_language")
+def on_set_language(data):
+    lang = data.get("lang", "zh") if data else "zh"
+    if lang in ("zh", "en"):
+        session["lang"] = lang
 
 
 @socketio.on("disconnect")
@@ -290,10 +307,10 @@ def on_restart_can(_data=None):
         subprocess.run(
             ["sudo", "-S", "systemctl", "restart", "ugv_bridge.service"],
             input=sudo_password, text=True, capture_output=True, timeout=10)
-        emit("restart_can_result", {"ok": True, "msg": "CAN 接口已重启"})
+        emit("restart_can_result", {"ok": True, "msg": i18n.t("can_restarted", _lang())})
         log.info("[CAN] Interface restarted via Web GUI")
     except Exception as e:
-        emit("restart_can_result", {"ok": False, "msg": f"重启失败: {e}"})
+        emit("restart_can_result", {"ok": False, "msg": i18n.t("restart_failed", _lang()).format(e)})
         log.error("[CAN] Restart failed: %s", e)
 
 
@@ -333,7 +350,7 @@ def on_admin_update_user(data):
     status  = data.get("status")
     me = _get_session_user()
     if me and me["id"] == user_id and role and role != "admin":
-        emit("error", {"msg": "不能修改自己的角色"}); return
+        emit("error", {"msg": i18n.t("cannot_modify_self", _lang())}); return
     auth.update_user(user_id, role=role, status=status)
     rows = auth.list_users()
     emit("admin_users", [dict(r) for r in rows])
@@ -345,7 +362,7 @@ def on_admin_delete_user(data):
     user_id = data.get("id")
     me = _get_session_user()
     if me and me["id"] == user_id:
-        emit("error", {"msg": "不能删除自己的账号"}); return
+        emit("error", {"msg": i18n.t("cannot_delete_self", _lang())}); return
     auth.delete_user(user_id)
     rows = auth.list_users()
     emit("admin_users", [dict(r) for r in rows])
@@ -356,7 +373,7 @@ def on_system_power(data):
     if not _require_role("admin"): return
     action = data.get("action", "")
     if action not in ("reboot", "shutdown"):
-        emit("error", {"msg": f"未知操作: {action}"}); return
+        emit("error", {"msg": i18n.t("unknown_action", _lang()).format(action)}); return
     user = _get_session_user()
     uid = user["id"] if user else "?"
     log.warning("[System] %s requested by user id=%s", action, uid)

@@ -1,21 +1,21 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>注册 — Robot Control Panel</title>
+  <title data-i18n="auth.title_register">注册 — Robot Control Panel</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body class="auth-page">
   <div class="auth-card">
     <h1>Robot Control Panel</h1>
-    <h2>注册账号</h2>
+    <h2 data-i18n="auth.title_register">注册账号</h2>
 
     {% if success %}
-    <div class="auth-alert ok">
+    <div class="auth-alert ok" data-i18n="auth.register_ok">
       注册成功！您的账号正在等待管理员审批，审批通过后即可登录。
     </div>
-    <p class="auth-footer"><a href="/login">返回登录</a></p>
+    <p class="auth-footer"><a href="/login" data-i18n="auth.back_to_login">返回登录</a></p>
     {% else %}
 
     {% if error %}
@@ -23,20 +23,23 @@
     {% endif %}
 
     <form method="post" action="/register">
-      <label>用户名
+      <label><span data-i18n="auth.username">用户名</span>
         <input type="text" name="username" autocomplete="username" required autofocus />
       </label>
-      <label>密码
+      <label><span data-i18n="auth.password">密码</span>
         <input type="password" name="password" autocomplete="new-password" required />
       </label>
-      <label>确认密码
+      <label><span data-i18n="auth.confirm_password">确认密码</span>
         <input type="password" name="confirm" autocomplete="new-password" required />
       </label>
-      <button type="submit" class="btn-primary btn-full">注册</button>
+      <button type="submit" class="btn-primary btn-full" data-i18n="auth.register_btn">注册</button>
     </form>
 
-    <p class="auth-footer">已有账号？<a href="/login">登录</a></p>
+    <p class="auth-footer"><span data-i18n="auth.has_account">已有账号？</span><a href="/login" data-i18n="auth.login_link">登录</a></p>
     {% endif %}
   </div>
+
+  <script src="/static/i18n.js"></script>
+  <script>I18n.init();</script>
 </body>
 </html>

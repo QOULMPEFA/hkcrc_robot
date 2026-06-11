@@ -598,6 +598,19 @@ body.auth-page {
 .auth-footer a { color: var(--accent); text-decoration: none; }
 .auth-footer a:hover { text-decoration: underline; }
 
+/* ── language switcher ──────────────────────────────────────────────────── */
+.lang-switcher {
+  background: #22253a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 90px;
+}
+.lang-switcher:focus { outline: 1px solid var(--accent); }
+
 /* ── header user ──────────────────────────────────────────────────────────── */
 .header-user {
   display: flex;
