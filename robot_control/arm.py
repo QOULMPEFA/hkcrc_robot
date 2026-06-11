@@ -425,11 +425,6 @@ class ArmController(RobotModule):
             self._state.safety_mode = safety_map.get(int(safety_mode_raw), f"SAFETY_{int(safety_mode_raw)}")
             self._state.is_enabled = int(robot_mode_raw) in (6, 8)  # IDLE, RUNNING
             self._check_collision()
-                if all(10 < v < 90 for v in vals):
-                    return vals
-            except struct.error:
-                continue
-        return None
 
     def _check_collision(self):
         """Software-level collision detection based on current monitoring.
