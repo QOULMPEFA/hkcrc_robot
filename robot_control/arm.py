@@ -57,7 +57,7 @@ class ArmController(RobotModule):
         self._host = cfg.get("host", "192.168.56.101")
         self._dash_port = int(cfg.get("dashboard_port", 29999))
         self._ur_port = int(cfg.get("urscript_port", 30001))
-        self._state_port = int(cfg.get("state_port", 30002))
+        self._state_port = int(cfg.get("state_port", 30004))
         self._state = ArmState()
         self._lock = threading.RLock()
         self._running = False
@@ -280,21 +280,33 @@ class ArmController(RobotModule):
         else:
             self._send_urscript("set_collision_detection(False)")
 
-    # ── port 30002 real-time state reader ──────────────────────────────────
+    # ── RTDE real-time state reader (port 30004) ───────────────────────────
+
+    # RTDE output recipe — field order defines binary layout.
+    # Each field is 1 or 6 big-endian doubles (8 bytes each).
+    RTDE_RECIPE = [
+        ("actual_q",              6),   # offset   0,  48 bytes
+        ("actual_current",         6),   # offset  48,  48 bytes
+        ("joint_temperatures",     6),   # offset  96,  48 bytes
+        ("robot_mode",             1),   # offset 144,   8 bytes
+        ("safety_mode",            1),   # offset 152,   8 bytes
+    ]
+    RTDE_PKG_DATA_LEN = 160  # total bytes from recipe above
 
     def _state_reader_loop(self):
-        """Connect to port 30002 and parse 10 Hz RobotState binary messages."""
+        """Connect to RTDE port 30004 and stream real-time joint data."""
         while self._running:
             sock = None
             try:
                 sock = socket.create_connection((self._host, self._state_port), timeout=3.0)
-                sock.settimeout(1.0)
+                sock.settimeout(2.0)
                 with self._lock:
                     self._state_sock = sock
-                log.info("[Arm] State reader connected to port %d", self._state_port)
-                self._read_state_messages(sock)
+                log.info("[Arm] RTDE connected to port %d", self._state_port)
+                self._rtde_handshake(sock)
+                self._rtde_read_loop(sock)
             except (OSError, ConnectionRefusedError) as e:
-                log.debug("[Arm] State reader connection failed: %s", e)
+                log.debug("[Arm] RTDE connection failed: %s", e)
             finally:
                 with self._lock:
                     self._state_sock = None
@@ -306,7 +318,54 @@ class ArmController(RobotModule):
             if self._running:
                 time.sleep(self.RECONNECT_INTERVAL)
 
-    def _read_state_messages(self, sock: socket.socket):
+    def _rtde_handshake(self, sock: socket.socket):
+        """Perform RTDE protocol handshake: version → setup → start."""
+        # In PolyScope ≥5.0 the client sends first (no welcome message).
+        # Step 1: request protocol version
+        sock.sendall(b"RTDE_REQUEST_PROTOCOL_VERSION 2\n")
+        time.sleep(0.1)
+        resp = self._rtde_recv_line(sock)
+        log.info("[Arm] RTDE version: %s", resp)
+
+        # Step 2: setup output recipe
+        names = ",".join(f[0] for f in self.RTDE_RECIPE)
+        recipe_id = 7
+        cmd = f"RTDE_CONTROL_PACKAGE_SETUP_OUTPUTS {recipe_id} {names}\n"
+        sock.sendall(cmd.encode())
+        time.sleep(0.2)
+        resp = self._rtde_recv_line(sock)
+        log.info("[Arm] RTDE setup: %s", resp)
+        if resp and "ACCEPTED" not in resp.upper():
+            log.warning("[Arm] RTDE recipe rejected: %s — trying alt names", resp)
+            # Fallback: try without temperatures
+            alt_names = "actual_q,actual_current,robot_mode,safety_mode"
+            cmd2 = f"RTDE_CONTROL_PACKAGE_SETUP_OUTPUTS {recipe_id} {alt_names}\n"
+            sock.sendall(cmd2.encode())
+            time.sleep(0.2)
+            resp = self._rtde_recv_line(sock)
+            log.info("[Arm] RTDE alt setup: %s", resp)
+
+        # Step 3: start streaming
+        sock.sendall(b"RTDE_CONTROL_PACKAGE_START\n")
+        time.sleep(0.1)
+        resp = self._rtde_recv_line(sock)
+        log.info("[Arm] RTDE start: %s", resp)
+
+    @staticmethod
+    def _rtde_recv_line(sock: socket.socket) -> str:
+        buf = b""
+        try:
+            while b"\n" not in buf:
+                chunk = sock.recv(256)
+                if not chunk:
+                    break
+                buf += chunk
+        except socket.timeout:
+            pass
+        return buf.decode("ascii", errors="replace").strip()
+
+    def _rtde_read_loop(self, sock: socket.socket):
+        """Read and parse RTDE binary data packages."""
         buf = b""
         while self._running:
             try:
@@ -314,131 +373,58 @@ class ArmController(RobotModule):
                 if not chunk:
                     break
                 buf += chunk
-                # Parse complete messages: [4B len] [1B type] [body]
-                while len(buf) >= 5:
-                    msg_len = struct.unpack(">I", buf[0:4])[0]
-                    if msg_len < 5 or msg_len > 2000:
-                        # Lost sync — scan forward
-                        buf = buf[1:]
+                # RTDE binary package: [2B size (BE uint16)] [1B type] [data]
+                while len(buf) >= 3:
+                    pkg_size = struct.unpack(">H", buf[0:2])[0]
+                    if pkg_size < 3:
+                        buf = buf[1:]  # lost sync
                         continue
-                    if len(buf) < msg_len:
-                        break  # Incomplete message
-                    msg_type = buf[4]
-                    body = buf[5:msg_len]
-                    buf = buf[msg_len:]
-                    if msg_type == 16:  # RobotState
-                        self._parse_robot_state_body(body)
+                    if len(buf) < pkg_size:
+                        break
+                    pkg_type = buf[2]
+                    data = buf[3:pkg_size]
+                    buf = buf[pkg_size:]
+                    if pkg_type == 0 and len(data) >= self.RTDE_PKG_DATA_LEN:
+                        self._parse_rtde_data(data)
             except socket.timeout:
                 pass
             except OSError:
                 break
 
-    def _parse_robot_state_body(self, body: bytes):
-        """Parse RobotState body into joint data.
-
-        UR5e PolyScope 5.x sends RobotState as a flat C struct on port 30002.
-        Full messages (~1472 bytes) contain all fields; incremental (~717 bytes)
-        contain only rapidly-changing fields (q_actual, qd_actual).
-
-        JointData struct layout (all fields are 6 × big-endian double = 48 bytes):
-          q_actual[6]       — confirmed at body offset 295
-          q_target[6]       — offset 343
-          qd_actual[6]      — offset 391
-          i_actual[6]       — offset 439
-          i_target[6]       — offset 487
-          joint_temperatures[6] — offset 535 (may be 6×float=24B in older versions)
-        """
-        if len(body) < 295 + 48:
+    def _parse_rtde_data(self, data: bytes):
+        """Parse RTDE binary data using the known recipe layout (all BE doubles)."""
+        try:
+            actual_q_rad = struct.unpack(">6d", data[0:48])
+            actual_current = struct.unpack(">6d", data[48:96])
+            joint_temps = struct.unpack(">6d", data[96:144])
+            robot_mode_raw = struct.unpack(">d", data[144:152])[0]
+            safety_mode_raw = struct.unpack(">d", data[152:160])[0]
+        except struct.error:
             return
 
-        parsed_q = None
-        parsed_i = None
-        parsed_t = None
-        is_full_msg = len(body) > 1000  # full message has ~1472 bytes
+        q_deg = [math.degrees(v) for v in actual_q_rad]
 
-        def _valid_joint_angles(vals):
-            return all(-720 < v < 720 for v in vals)  # rad → deg must be sane
-
-        def _valid_currents(vals):
-            return all(-50 < v < 50 for v in vals)  # amps, allow regen negative
-
-        def _valid_temps(vals):
-            return all(-10 < v < 120 for v in vals)  # celsius
-
-        try:
-            # Always parse q_actual at confirmed offset 295
-            raw = struct.unpack(">6d", body[295:295 + 48])
-            q_candidate = [math.degrees(v) for v in raw]
-            if _valid_joint_angles(q_candidate):
-                parsed_q = q_candidate
-
-            # Parse i_actual at offset 439 (q_actual + 3 fields)
-            if len(body) >= 439 + 48:
-                raw_i = struct.unpack(">6d", body[439:439 + 48])
-                if _valid_currents(raw_i):
-                    parsed_i = list(raw_i)
-
-            # Parse joint_temperatures at offset 535 (q_actual + 5 fields)
-            if len(body) >= 535 + 48:
-                raw_t = struct.unpack(">6d", body[535:535 + 48])
-                t_candidate = list(raw_t)
-                if _valid_temps(t_candidate):
-                    parsed_t = t_candidate
-                else:
-                    # Try 6 × float (24 bytes) instead of double
-                    if len(body) >= 535 + 24:
-                        raw_tf = struct.unpack(">6f", body[535:535 + 24])
-                        t_candidate = list(raw_tf)
-                        if _valid_temps(t_candidate):
-                            parsed_t = t_candidate
-
-            # For full messages, also try scanning for additional joint data blocks
-            # that might be at different offsets in newer controller versions
-            if is_full_msg and parsed_i is None:
-                parsed_i = self._scan_for_currents(body, start=400, end=800)
-            if is_full_msg and parsed_t is None:
-                parsed_t = self._scan_for_temps(body, start=500, end=900)
-
-        except struct.error:
-            pass
+        # Map robot_mode integer to string
+        mode_map = {
+            0: "NO_CONTROLLER", 1: "DISCONNECTED", 2: "CONFIRM_SAFETY",
+            3: "BOOTING", 4: "POWER_OFF", 5: "POWER_ON", 6: "IDLE",
+            7: "BACKDRIVE", 8: "RUNNING", 9: "UPDATING_FIRMWARE",
+        }
+        safety_map = {
+            0: "NORMAL", 1: "REDUCED", 2: "PROTECTIVE_STOP",
+            3: "RECOVERY", 4: "SAFEGUARD_STOP", 5: "SYSTEM_EMERGENCY_STOP",
+            6: "ROBOT_EMERGENCY_STOP", 7: "VIOLATION", 8: "FAULT",
+            9: "VALIDATE_JOINT_ID", 10: "UNDEFINED_SAFETY_MODE",
+        }
 
         with self._lock:
-            if parsed_q:
-                self._state.joint_actual_deg = parsed_q
-            if parsed_i:
-                self._state.joint_currents_a = parsed_i
-            if parsed_t:
-                self._state.joint_temps_c = parsed_t
+            self._state.joint_actual_deg = q_deg
+            self._state.joint_currents_a = list(actual_current)
+            self._state.joint_temps_c = list(joint_temps)
+            self._state.robot_mode = mode_map.get(int(robot_mode_raw), f"MODE_{int(robot_mode_raw)}")
+            self._state.safety_mode = safety_map.get(int(safety_mode_raw), f"SAFETY_{int(safety_mode_raw)}")
+            self._state.is_enabled = int(robot_mode_raw) in (6, 8)  # IDLE, RUNNING
             self._check_collision()
-
-    @staticmethod
-    def _scan_for_currents(body: bytes, start: int, end: int):
-        """Scan body range for a 6-double sequence that looks like motor currents (0-30A)."""
-        for off in range(start, min(end, len(body) - 48), 8):
-            try:
-                vals = list(struct.unpack(">6d", body[off:off + 48]))
-                # Motor currents are typically 0-20A, non-negative (or slightly negative for regen)
-                if all(-10 < v < 30 for v in vals) and any(abs(v) > 0.01 for v in vals):
-                    return vals
-            except struct.error:
-                continue
-        return None
-
-    @staticmethod
-    def _scan_for_temps(body: bytes, start: int, end: int):
-        """Scan body range for a 6-value sequence that looks like temperatures (15-80°C)."""
-        # Try doubles first
-        for off in range(start, min(end, len(body) - 48), 8):
-            try:
-                vals = list(struct.unpack(">6d", body[off:off + 48]))
-                if all(10 < v < 90 for v in vals):
-                    return vals
-            except struct.error:
-                continue
-        # Try floats
-        for off in range(start, min(end, len(body) - 24), 4):
-            try:
-                vals = list(struct.unpack(">6f", body[off:off + 24]))
                 if all(10 < v < 90 for v in vals):
                     return vals
             except struct.error:
