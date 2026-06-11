@@ -260,6 +260,10 @@ class CameraModule(RobotModule):
             try:
                 self._ffmpeg_proc.kill()
                 self._ffmpeg_proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                log.warning("[Camera] ffmpeg kill timed out — force-releasing %s", self._device)
+                import os
+                os.system(f"fuser -k {self._device} 2>/dev/null")
             except Exception:
                 pass
             self._ffmpeg_proc = None
@@ -324,5 +328,10 @@ class CameraModule(RobotModule):
 
     def _ensure_running(self) -> None:
         with self._lock:
-            if self._ffmpeg_proc is None or self._ffmpeg_proc.poll() is not None:
-                self._start_ffmpeg()
+            need_start = self._ffmpeg_proc is None or self._ffmpeg_proc.poll() is not None
+        if need_start:
+            self._start_ffmpeg()
+        if not self._running:
+            self._running = True
+            t = threading.Thread(target=self._frame_loop, daemon=True, name="cam-loop")
+            t.start()
