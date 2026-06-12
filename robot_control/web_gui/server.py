@@ -451,7 +451,7 @@ def main():
         "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
         "camera": {"devices": ["/dev/video6", "/dev/video4"]},
         "motor":  {},
-        "hand":   {"protocol": "modbus", "port": None, "baudrate": 115200, "slave_id": 0x7E},
+        "hand":   {"protocol": "can", "can_iface": "can0", "master_id": 1, "slave_id": 0x02},
     }
     #
     # ── Pipe robot minimal ──────────────────────────────────────────────

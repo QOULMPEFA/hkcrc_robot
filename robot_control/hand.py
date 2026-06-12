@@ -51,13 +51,20 @@ class HandController(RobotModule):
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         cfg = config or {}
+        # Protocol: "modbus" (serial) or "can" (SocketCAN 2.0)
+        self._protocol = cfg.get("protocol", "modbus")
         # Serial/Modbus config
         self._port = cfg.get("port", None)          # None = auto-detect
         self._baudrate = int(cfg.get("baudrate", 115200))
-        # CAN config
-        self._protocol = cfg.get("protocol", "modbus")  # "modbus" | "can"
+        # CAN config (SocketCAN 2.0)
+        self._can_iface = cfg.get("can_iface", "can0")
+        self._master_id = int(cfg.get("master_id", 1))
         # Shared
-        self._slave_id = int(cfg.get("slave_id", 0x7E))
+        self._slave_id = int(cfg.get("slave_id", 0x02))
+        # SocketCAN function references (set during _connect_can)
+        self._can_send_fn: Any = None
+        self._can_recv_fn: Any = None
+        self._can_close_fn: Any = None
 
         self._client: Optional[Any] = None
         self._connected = False
@@ -125,8 +132,9 @@ class HandController(RobotModule):
     def stop(self) -> None:
         self._running = False
         if self._loop and self._loop.is_running():
+            import asyncio as _asyncio
             self._loop.call_soon_threadsafe(
-                lambda: asyncio.ensure_future(self._shutdown()))
+                lambda: _asyncio.ensure_future(self._shutdown()))
         if self._loop_thread and self._loop_thread.is_alive():
             self._loop_thread.join(timeout=5)
         self._connected = False
@@ -295,15 +303,87 @@ class HandController(RobotModule):
         self._connected = True
 
     async def _connect_can(self) -> None:
-        raise NotImplementedError("CAN protocol not yet implemented in controller")
+        """Connect via CAN 2.0 SocketCAN."""
+        import sys as _sys, os as _os
+
+        # Ensure SDK path for common_socketcan imports
+        _sdk_path = _os.path.join(_os.path.dirname(__file__), "..",
+                                   "hand_brainco_sdk", "python")
+        _sdk_path = _os.path.normpath(_sdk_path)
+        if _sdk_path not in _sys.path:
+            _sys.path.insert(0, _sdk_path)
+
+        from common_socketcan import socketcan_open as _can_open, \
+            socketcan_close as _can_close, \
+            socketcan_send_message as _can_send, \
+            socketcan_receive_filtered as _can_recv
+
+        _LIBSTARK.init_logging()
+
+        self._can_send_fn = _can_send
+        self._can_recv_fn = _can_recv
+        self._can_close_fn = _can_close
+
+        # 1. Create device handler FIRST (matches demo: init_device_handler
+        #    in __init__ before socketcan_open)
+        self._client = _LIBSTARK.init_device_handler(
+            _LIBSTARK.StarkProtocolType.Can, self._master_id)
+
+        # 2. Open SocketCAN AFTER init_device_handler (SDK closes socket
+        #    during its own init)
+        _can_open(self._can_iface, canfd=False)
+
+        # 3. Register TX/RX callbacks
+        _LIBSTARK.set_can_tx_callback(self._can_tx_callback)
+        _LIBSTARK.set_can_rx_callback(self._can_rx_callback)
+
+        # 4. Query device info
+        info = await self._client.get_device_info(self._slave_id)
+        log.info("[Hand] Device: %s", info.description if info else "?")
+
+        self._connected = True
+
+    # ── CAN TX/RX callbacks (called from SDK internals) ───────────────────
+
+    def _can_tx_callback(self, _slave_id: int, can_id: int,
+                         data: list) -> bool:
+        if self._can_send_fn is None:
+            return False
+        try:
+            return self._can_send_fn(can_id, bytes(data))
+        except Exception as exc:
+            log.error("[Hand] CAN TX error: %s", exc)
+            return False
+
+    def _can_rx_callback(self, _slave_id: int, expected_can_id: int,
+                         expected_frames: int):
+        if self._can_recv_fn is None:
+            return (0, bytes([]))
+        try:
+            result = self._can_recv_fn(expected_can_id, expected_frames)
+            if result is None:
+                return (0, bytes([]))
+            can_id, data, _fc = result
+            return (can_id, bytes(data))
+        except Exception as exc:
+            log.debug("[Hand] CAN RX error: %s", exc)
+            return (0, bytes([]))
 
     async def _disconnect(self) -> None:
         if self._client:
             try:
-                _LIBSTARK.modbus_close(self._client)
+                if self._protocol == "can":
+                    _LIBSTARK.close_device_handler(self._client)
+                    if self._can_close_fn:
+                        self._can_close_fn()
+                else:
+                    _LIBSTARK.modbus_close(self._client)
             except Exception:
                 pass
             self._client = None
+            self._can_send_fn = None
+            self._can_recv_fn = None
+            self._can_close_fn = None
         self._connected = False
 
     async def _shutdown(self) -> None:
