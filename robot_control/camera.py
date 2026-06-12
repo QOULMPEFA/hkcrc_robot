@@ -34,7 +34,7 @@ def _detect_cameras() -> List[str]:
     """
     import os
     devices = []
-    for i in range(4):  # check /dev/video0 .. /dev/video3
+    for i in range(10):  # check /dev/video0 .. /dev/video9
         path = f"/dev/video{i}"
         if not os.path.exists(path):
             continue
@@ -82,6 +82,48 @@ def _detect_cameras() -> List[str]:
         except OSError:
             pass
     return devices
+
+
+def _sort_cameras_by_format(devices: List[str]) -> List[str]:
+    """Sort devices so MJPEG-capable ones come first.
+
+    Tries v4l2-ctl first (fast), then ffprobe (available on systems
+    without v4l2-ctl, e.g. Jetson).  MJPEG devices are preferred because
+    ffmpeg can do lossless -c:v copy passthrough.
+    """
+    mjpeg = []
+    other = []
+    for dev in devices:
+        has_mjpeg = False
+        # Try v4l2-ctl first (fast, single-purpose tool).
+        try:
+            info = subprocess.run(
+                ["v4l2-ctl", "-d", dev, "--list-formats"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if "MJPG" in info.stdout or "mjpeg" in info.stdout.lower():
+                has_mjpeg = True
+        except (FileNotFoundError, subprocess.SubprocessError):
+            # Fall back to ffprobe (e.g. Jetson without v4l2-ctl).
+            # ffprobe writes format listing to stderr, not stdout.
+            try:
+                info = subprocess.run(
+                    ["ffprobe", "-f", "v4l2", "-list_formats", "all",
+                     "-i", dev],
+                    capture_output=True, text=True, timeout=5,
+                )
+                combined = info.stdout + info.stderr
+                if "mjpeg" in combined.lower():
+                    has_mjpeg = True
+            except (FileNotFoundError, subprocess.SubprocessError):
+                pass
+        if has_mjpeg:
+            mjpeg.append(dev)
+        else:
+            other.append(dev)
+    if mjpeg:
+        log.info("[Camera] MJPEG device(s): %s", mjpeg)
+    return mjpeg + other
 
 
 class CameraModule(RobotModule):
@@ -147,6 +189,7 @@ class CameraModule(RobotModule):
 
         # Refresh device list on each start.
         self._available_devices = _detect_cameras()
+        self._available_devices = _sort_cameras_by_format(self._available_devices)
         if not self._available_devices:
             log.warning("[Camera] No video capture devices found! "
                         "Camera module running in standby (waiting for USB camera). "
