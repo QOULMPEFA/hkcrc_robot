@@ -1,0 +1,12 @@
+[Unit]
+Description=Setup CAN0 interface (500 kbps)
+After=sys-subsystem-net-devices-can0.device
+Requires=sys-subsystem-net-devices-can0.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /home/yu/robot_code/stepper_motor_sdk/scripts/setup_jetson_can.sh can0 500000
+
+[Install]
+WantedBy=multi-user.target

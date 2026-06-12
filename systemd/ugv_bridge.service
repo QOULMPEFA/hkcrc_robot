@@ -1,0 +1,16 @@
+[Unit]
+Description=UGV CAN Bridge (Ranger Mini 3.0)
+After=setup-can0.service
+Requires=setup-can0.service
+
+[Service]
+Type=simple
+ExecStart=/home/yu/robot_code/ugv_sdk/build/bin/ugv_bridge can0
+Restart=always
+RestartSec=5
+User=root
+StandardOutput=append:/var/log/ugv_bridge.log
+StandardError=append:/var/log/ugv_bridge.log
+
+[Install]
+WantedBy=multi-user.target

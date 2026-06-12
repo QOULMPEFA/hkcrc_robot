@@ -226,6 +226,7 @@ int main(int argc, char *argv[]) {
   double last_linear = 0.0, last_angular = 0.0;
   bool motion_mode_spinning = false;
   bool pending_estop = false;
+  bool pending_enable = false;
 
   auto process_command = [&](const std::string &cmd_json) {
     std::string cmd = extract_str(cmd_json, "cmd");
@@ -247,12 +248,11 @@ int main(int argc, char *argv[]) {
       last_linear = 0.0;
       last_angular = 0.0;
       motion_mode_spinning = false;
-      robot->ResetRobotState();
-      robot->EnableCommandedMode();
-      std::cout << "[bridge] Faults cleared, command mode enabled" << std::endl;
+      pending_enable = true;
+      std::cout << "[bridge] Enable queued" << std::endl;
     } else if (cmd == "reset") {
-      robot->ResetRobotState();
-      std::cout << "[bridge] Robot state reset" << std::endl;
+      pending_enable = true;
+      std::cout << "[bridge] Reset queued" << std::endl;
     } else {
       std::cerr << "[bridge] Unknown cmd: " << cmd << std::endl;
     }
@@ -322,6 +322,13 @@ int main(int argc, char *argv[]) {
     static bool last_mode_spinning = false;
     auto now = std::chrono::steady_clock::now();
 
+    // Handle pending enable/reset — SDK calls only in heartbeat
+    if (pending_enable) {
+      robot->ResetRobotState();
+      robot->EnableCommandedMode();
+      pending_enable = false;
+      std::cout << "[bridge] Faults cleared, command mode enabled" << std::endl;
+    }
     // Handle pending estop — zero velocity immediately
     if (pending_estop) {
       robot->SetMotionCommand(0.0, 0.0);

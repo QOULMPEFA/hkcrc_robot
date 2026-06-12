@@ -251,7 +251,7 @@ class HandController(RobotModule):
         await self._disconnect()
 
     async def _connect(self) -> None:
-        """Auto-detect and open connection to the hand."""
+        """Open connection to the hand (with automatic retry)."""
         if self._client is not None:
             return
         import asyncio as _asyncio
@@ -263,15 +263,23 @@ class HandController(RobotModule):
 
             # Set unit mode to normalized (0-1000 per-mil).
             if self._client and self._connected:
-                await self._client.set_finger_unit_mode(
-                    self._slave_id, _LIBSTARK.FingerUnitMode.Normalized)
+                try:
+                    await self._client.set_finger_unit_mode(
+                        self._slave_id, _LIBSTARK.FingerUnitMode.Normalized)
+                except Exception as _mode_exc:
+                    log.debug("[Hand] set_finger_unit_mode skipped: %s", _mode_exc)
                 # Read initial state.
                 await self._read_motor_status()
                 log.info("[Hand] Connected — protocol=%s, slave_id=0x%02X",
                          self._protocol, self._slave_id)
         except Exception as exc:
-            log.warning("[Hand] Auto-detect failed: %s — will retry", exc)
-            # Schedule a retry.
+            log.warning("[Hand] Connection failed: %s — will retry", exc)
+            # Clean up partial state before retry.
+            self._connected = False
+            self._client = None
+            self._can_send_fn = None
+            self._can_recv_fn = None
+            self._can_close_fn = None
             await _asyncio.sleep(5)
             _asyncio.ensure_future(self._connect())
 
@@ -396,25 +404,39 @@ class HandController(RobotModule):
         try:
             if cmd == "set_finger":
                 idx, pos, spd = args
-                # Convert 0-1 to 0-1000 (per-mil normalized).
                 target = max(0, min(1000, int(pos * 1000)))
-                speed = max(0, min(1000, int(spd * 10)))
                 positions = list(self._finger_positions)
                 positions[idx] = target
-                await self._client.set_finger_positions_and_speeds(
-                    self._slave_id, positions, [speed] * 6)
+                if self._protocol == "can":
+                    await self._client.set_finger_positions(
+                        self._slave_id, positions)
+                else:
+                    speed = max(0, min(1000, int(spd * 10)))
+                    await self._client.set_finger_positions_and_speeds(
+                        self._slave_id, positions, [speed] * 6)
 
             elif cmd == "set_all":
                 positions, spd = args
                 targets = [max(0, min(1000, int(p * 1000))) for p in positions]
-                speed = max(0, min(1000, int(spd * 10)))
-                await self._client.set_finger_positions_and_speeds(
-                    self._slave_id, targets, [speed] * 6)
+                if self._protocol == "can":
+                    await self._client.set_finger_positions(
+                        self._slave_id, targets)
+                else:
+                    speed = max(0, min(1000, int(spd * 10)))
+                    await self._client.set_finger_positions_and_speeds(
+                        self._slave_id, targets, [speed] * 6)
 
             elif cmd == "stop":
-                # Send zero speed to stop.
-                await self._client.set_finger_speeds(
-                    self._slave_id, [0] * 6)
+                if self._protocol == "can":
+                    # Hold current position (de-facto stop on CAN 2.0)
+                    cur = [int(p * 1000) for p in self._finger_positions]
+                    await self._client.set_finger_positions(
+                        self._slave_id, cur)
+                else:
+                    await self._client.set_finger_speeds(
+                        self._slave_id, [0] * 6)
+
+            self._fault = False
         except Exception as exc:
             log.error("[Hand] Command '%s' failed: %s", cmd, exc)
             self._fault = True

@@ -1,0 +1,17 @@
+[Unit]
+Description=Robot Control Panel
+After=network.target setup-can0.service setup-can1.service
+Requires=setup-can0.service setup-can1.service
+
+[Service]
+Type=simple
+User=yu
+WorkingDirectory=/home/yu/robot_code
+ExecStart=/usr/bin/python3 /home/yu/robot_code/robot_control/web_gui/server.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/robot_control_panel.log
+StandardError=append:/var/log/robot_control_panel.log
+
+[Install]
+WantedBy=multi-user.target
