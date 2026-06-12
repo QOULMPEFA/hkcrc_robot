@@ -7,13 +7,17 @@ available devices when the active one fails repeatedly.
 Streaming paths:
   Primary:   /dev/videoN → ffmpeg (H.264) → RTMP → SRS → WebRTC → browser
   Fallback:  /dev/videoN → ffmpeg (MJPEG) → pipe → /stream HTTP (MJPEG)
+
+Multi-device: each _CameraDeviceStream manages one device; CameraModule
+coordinates N streams.  Server exposes /stream/<device> per device.
 """
 
 import logging
+import os as _os
 import subprocess
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from robot_control.module_base import RobotModule
 
@@ -25,6 +29,8 @@ _MAX_RESTARTS = 3
 _FRAME_TIMEOUT = 5.0
 
 
+# ── module-level helpers ──────────────────────────────────────────────────
+
 def _detect_cameras() -> List[str]:
     """Return /dev/video paths that are real video capture devices.
 
@@ -32,11 +38,10 @@ def _detect_cameras() -> List[str]:
     and metadata-only sub-devices (UVC cameras often expose /dev/video1 for
     video and /dev/video2 for metadata — we only want the video one).
     """
-    import os
     devices = []
     for i in range(10):  # check /dev/video0 .. /dev/video9
         path = f"/dev/video{i}"
-        if not os.path.exists(path):
+        if not _os.path.exists(path):
             continue
         checked_v4l2 = False
         try:
@@ -46,32 +51,24 @@ def _detect_cameras() -> List[str]:
             )
             checked_v4l2 = True
             out = info.stdout
-            # Skip codec/M2M devices (cedrus).
             if "Memory-to-Memory" in out or "Memory to Memory" in out:
                 log.info("[Camera] skip %s — codec/M2M device", path)
                 continue
-            # Must have actual Video Capture in Device Caps (Capabilities
-            # alone is not enough — metadata sub-devices report Video Capture
-            # in Capabilities but not Device Caps).
             dc_section = out.split("Device Caps", 1)
             if len(dc_section) > 1 and "Video Capture" in dc_section[1]:
                 devices.append(path)
                 continue
             if "Video Capture" in out and "Device Capabilities" not in out:
-                # Older kernels that don't print Device Caps — trust it.
                 devices.append(path)
                 continue
-            # v4l2-ctl succeeded but this isn't a video capture device
-            # (metadata-only sub-device, etc.) — skip, don't fall through.
             log.info("[Camera] skip %s — no Video Capture in Device Caps", path)
             continue
         except (FileNotFoundError, subprocess.SubprocessError):
-            pass  # v4l2-ctl missing or failed — fall through to sysfs
+            pass
 
         if checked_v4l2:
-            continue  # already determined it's not a capture device
+            continue
 
-        # Sysfs fallback: check driver name to filter codec nodes (cedrus).
         try:
             with open(f"/sys/class/video4linux/video{i}/name") as fh:
                 name = fh.read().strip()
@@ -82,6 +79,30 @@ def _detect_cameras() -> List[str]:
         except OSError:
             pass
     return devices
+
+
+def _device_has_mjpeg(dev: str) -> bool:
+    """Check if a single device supports MJPEG format."""
+    try:
+        info = subprocess.run(
+            ["v4l2-ctl", "-d", dev, "--list-formats"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if "MJPG" in info.stdout or "mjpeg" in info.stdout.lower():
+            return True
+    except (FileNotFoundError, subprocess.SubprocessError):
+        try:
+            info = subprocess.run(
+                ["ffprobe", "-f", "v4l2", "-list_formats", "all",
+                 "-i", dev],
+                capture_output=True, text=True, timeout=5,
+            )
+            combined = info.stdout + info.stderr
+            if "mjpeg" in combined.lower():
+                return True
+        except (FileNotFoundError, subprocess.SubprocessError):
+            pass
+    return False
 
 
 def _sort_cameras_by_format(devices: List[str]) -> List[str]:
@@ -95,7 +116,6 @@ def _sort_cameras_by_format(devices: List[str]) -> List[str]:
     other = []
     for dev in devices:
         has_mjpeg = False
-        # Try v4l2-ctl first (fast, single-purpose tool).
         try:
             info = subprocess.run(
                 ["v4l2-ctl", "-d", dev, "--list-formats"],
@@ -104,8 +124,6 @@ def _sort_cameras_by_format(devices: List[str]) -> List[str]:
             if "MJPG" in info.stdout or "mjpeg" in info.stdout.lower():
                 has_mjpeg = True
         except (FileNotFoundError, subprocess.SubprocessError):
-            # Fall back to ffprobe (e.g. Jetson without v4l2-ctl).
-            # ffprobe writes format listing to stderr, not stdout.
             try:
                 info = subprocess.run(
                     ["ffprobe", "-f", "v4l2", "-list_formats", "all",
@@ -126,102 +144,75 @@ def _sort_cameras_by_format(devices: List[str]) -> List[str]:
     return mjpeg + other
 
 
-class CameraModule(RobotModule):
-    """USB camera — WebRTC primary, MJPEG fallback, auto device cycling."""
+def _reset_usb_device(device_path: str) -> None:
+    """Unbind and rebind the USB device backing *device_path*."""
+    dev_node = _os.path.basename(device_path)
+    dev_path = f"/sys/class/video4linux/{dev_node}/device"
+    usb_dev = None
+    driver = None
+    try:
+        parent = _os.path.realpath(dev_path)
+        for _ in range(4):
+            if _os.path.isdir(_os.path.join(parent, "driver")):
+                usb_dev = _os.path.basename(parent)
+                driver_link = _os.path.realpath(_os.path.join(parent, "driver"))
+                driver = _os.path.basename(driver_link)
+                break
+            parent = _os.path.dirname(parent)
+    except OSError:
+        pass
+    if not usb_dev or not driver:
+        log.warning("[Camera] USB reset: could not find USB device for %s", device_path)
+        return
+    log.info("[Camera] USB reset: unbind %s from %s …", usb_dev, driver)
+    try:
+        with open(f"/sys/bus/usb/drivers/{driver}/unbind", "w") as fh:
+            fh.write(usb_dev)
+        time.sleep(2)
+        with open(f"/sys/bus/usb/drivers/{driver}/bind", "w") as fh:
+            fh.write(usb_dev)
+        time.sleep(1)
+        log.info("[Camera] USB reset: bind complete for %s", device_path)
+    except OSError as exc:
+        log.warning("[Camera] USB reset failed: %s", exc)
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        cfg = config or {}
-        self._device = cfg.get("device", "/dev/video0")
-        self._width = int(cfg.get("width", 800))
-        self._height = int(cfg.get("height", 600))
-        self._fps = int(cfg.get("fps", 15))
-        self._rtmp_url = cfg.get("rtmp_url", "rtmp://localhost/live/cam")
+
+# ── _CameraDeviceStream (one per device) ──────────────────────────────────
+
+class _CameraDeviceStream:
+    """Manages ONE camera device: ffmpeg, frame buffer, subscriber pool."""
+
+    def __init__(self, device: str, width: int = 800, height: int = 600,
+                 fps: int = 30):
+        self._device = device
+        self._width = width
+        self._height = height
+        self._fps = fps
+        self._has_mjpeg = _device_has_mjpeg(device)
 
         self._cond = threading.Condition()
         self._client_seq: Dict[int, int] = {}
         self._frame: Optional[bytes] = None
         self._frame_seq: int = 0
-        self._last_frame_time = 0.0
+        self._last_frame_time: float = 0.0
         self._ffmpeg_proc: Optional[subprocess.Popen] = None
-        self._running = False
-        self._restart_count = 0
-        self._device_idx = 0
-        self._available_devices: List[str] = []
+        self._running: bool = False
+        self._restart_count: int = 0
+        self._stderr_lines: List[str] = []
+        self._next_cid: int = 0
 
-    # ── RobotModule metadata ─────────────────────────────────────────────
-
-    @property
-    def name(self) -> str:
-        return "camera"
-
-    @property
-    def display_name(self) -> str:
-        return "摄像头"
-
-    def get_state_schema(self) -> Dict[str, Any]:
-        return {
-            "connected": False,
-            "client_count": 0,
-            "frame_bytes": 0,
-            "device": self._device,
-            "signal": "unknown",
-        }
-
-    def get_socketio_handlers(self) -> Dict[str, callable]:
-        return {"camera_reset": self._handle_camera_reset}
-
-    def _handle_camera_reset(self, data: dict, emit) -> None:
-        """Reset camera: kill ffmpeg, USB reset, restart ffmpeg."""
-        log.info("[Camera] Manual reset requested from GUI")
-        self._restart_count = 0
-        self._reset_usb()
-        # Force-restart ffmpeg on the (possibly new) device.
-        self._choose_active_device()
-        self._start_ffmpeg()
-        emit("camera_reset_result", {"ok": True})
-
-    # ── lifecycle ───────────────────────────────────────────────────────
+    # ── lifecycle ──────────────────────────────────────────────────────
 
     def start(self) -> None:
         if self._running:
             return
         self._running = True
-
-        # Refresh device list on each start.
-        self._available_devices = _detect_cameras()
-        self._available_devices = _sort_cameras_by_format(self._available_devices)
-        if not self._available_devices:
-            log.warning("[Camera] No video capture devices found! "
-                        "Camera module running in standby (waiting for USB camera). "
-                        "Check: lsusb, ls /dev/v4l/by-id/")
-            # Start a background re-scanner for hotplug detection.
-            t = threading.Thread(target=self._hotplug_watch, daemon=True, name="cam-hotplug")
-            t.start()
-            return
-        log.info("[Camera] devices found: %s", self._available_devices)
-
-        self._choose_active_device()
         self._start_ffmpeg()
-
-        t = threading.Thread(target=self._frame_loop, daemon=True, name="cam-loop")
+        t = threading.Thread(target=self._frame_loop, daemon=True,
+                             name=f"cam-loop-{_os.path.basename(self._device)}")
         t.start()
-        log.info("[Camera] Module started — device=%s, %dx%d", self._device, self._width, self._height)
-
-    def _hotplug_watch(self) -> None:
-        """Periodically re-scan for USB cameras (hotplug detection)."""
-        while True:
-            time.sleep(10)
-            devices = _detect_cameras()
-            if devices:
-                log.info("[Camera] Hotplug detected: %s — restarting", devices)
-                self._available_devices = devices
-                self._device_idx = 0
-                self._choose_active_device()
-                self._running = True
-                self._start_ffmpeg()
-                t = threading.Thread(target=self._frame_loop, daemon=True, name="cam-loop")
-                t.start()
-                return  # Exit hotplug watch, normal frame loop takes over
+        log.info("[Camera] stream started — device=%s %dx%d",
+                 self._device, self._width, self._height)
 
     def stop(self) -> None:
         with self._cond:
@@ -230,12 +221,9 @@ class CameraModule(RobotModule):
             self._client_seq.clear()
             self._cond.notify_all()
         self._kill_ffmpeg()
-        log.info("[Camera] Module stopped")
+        log.info("[Camera] stream stopped — device=%s", self._device)
 
-    def emergency_stop(self) -> None:
-        self.stop()
-
-    # ── state ───────────────────────────────────────────────────────────
+    # ── state ──────────────────────────────────────────────────────────
 
     def get_state(self) -> Dict[str, Any]:
         signal = "ok"
@@ -258,15 +246,12 @@ class CameraModule(RobotModule):
                 "signal": signal,
             }
 
-    # ── subscriber API ──────────────────────────────────────────────────
-
-    _next_cid: int = 0
+    # ── subscriber API ─────────────────────────────────────────────────
 
     def subscribe(self) -> int:
-        """Return a client-id for use with wait_frame / unsubscribe."""
         self._ensure_running()
         cid = self._next_cid
-        CameraModule._next_cid = cid + 1
+        self._next_cid = cid + 1
         with self._cond:
             self._client_seq[cid] = self._frame_seq
         return cid
@@ -275,8 +260,9 @@ class CameraModule(RobotModule):
         with self._cond:
             self._client_seq.pop(cid, None)
 
-    def wait_frame(self, cid: int, timeout: float = 5.0) -> Tuple[Optional[bytes], int]:
-        """Block until a newer frame is available. Returns (frame, seq) or (None, seq) on timeout."""
+    def wait_frame(self, cid: int, timeout: float = 5.0
+                   ) -> Tuple[Optional[bytes], int]:
+        """Block until a newer frame is available. Returns (frame, seq)."""
         with self._cond:
             last = self._client_seq.get(cid, 0)
             while self._frame_seq == last and self._running:
@@ -291,99 +277,57 @@ class CameraModule(RobotModule):
         with self._cond:
             return len(self._client_seq)
 
-    # ── internals: device selection ─────────────────────────────────────
-
-    def _choose_active_device(self) -> None:
-        if self._available_devices:
-            self._device = self._available_devices[self._device_idx % len(self._available_devices)]
-        log.info("[Camera] active device → %s", self._device)
-
-    def _cycle_device(self) -> None:
-        """Move to the next available camera device."""
+    def force_restart(self) -> None:
+        """Kill ffmpeg and restart (e.g. on manual reset from GUI)."""
         self._restart_count = 0
-        if len(self._available_devices) <= 1:
-            # Only one device — try USB reset before retrying.
-            log.info("[Camera] single device — USB reset then retry %s", self._device)
-            self._reset_usb()
-            return
-        self._device_idx = (self._device_idx + 1) % len(self._available_devices)
-        self._choose_active_device()
-        log.warning("[Camera] cycled to next device: %s", self._device)
+        _reset_usb_device(self._device)
+        self._start_ffmpeg()
 
-    def _reset_usb(self) -> None:
-        """Unbind and rebind the USB device backing the active camera.
-
-        This recovers the camera from UVC control failures (EPIPE on
-        GET_DEF queries) that leave it in a wedged state where the
-        device opens but produces no frames.
-        """
-        import os as _os
-        dev_node = _os.path.basename(self._device)  # e.g. "video1"
-        dev_path = f"/sys/class/video4linux/{dev_node}/device"
-        usb_dev = None
-        try:
-            # Walk up to find the USB device entry (contains 'driver' symlink).
-            parent = _os.path.realpath(dev_path)
-            for _ in range(4):
-                if _os.path.isdir(_os.path.join(parent, "driver")):
-                    usb_dev = _os.path.basename(parent)
-                    driver_link = _os.path.realpath(_os.path.join(parent, "driver"))
-                    driver = _os.path.basename(driver_link)
-                    break
-                parent = _os.path.dirname(parent)
-        except OSError:
-            pass
-        if not usb_dev or not driver:
-            log.warning("[Camera] USB reset: could not find USB device for %s", self._device)
-            return
-        log.info("[Camera] USB reset: unbind %s from %s …", usb_dev, driver)
-        try:
-            with open(f"/sys/bus/usb/drivers/{driver}/unbind", "w") as fh:
-                fh.write(usb_dev)
-            time.sleep(2)
-            with open(f"/sys/bus/usb/drivers/{driver}/bind", "w") as fh:
-                fh.write(usb_dev)
-            time.sleep(1)
-            # Re-detect available devices (device numbering may change).
-            self._available_devices = _detect_cameras()
-            log.info("[Camera] USB reset: bind complete, devices=%s", self._available_devices)
-        except OSError as exc:
-            log.warning("[Camera] USB reset failed: %s", exc)
-
-    # ── internals: unified ffmpeg (MJPEG pipe + RTMP push) ──────────────
+    # ── internals: ffmpeg ──────────────────────────────────────────────
 
     def _start_ffmpeg(self) -> None:
-        """Launch ffmpeg with MJPEG passthrough to pipe:1 (low-latency).
-
-        Single device open avoids contention on USB cameras that don't
-        support concurrent access.
-        """
         self._kill_ffmpeg()
-        # Force-release the device from any orphaned processes (e.g. stale
-        # ffmpeg from a previous service run killed by systemd).
-        import os as _os
         _os.system(f"fuser -k {self._device} 2>/dev/null")
         time.sleep(0.5)
-        cmd = [
-            "ffmpeg",
-            "-fflags", "nobuffer",
-            "-flags", "low_delay",
-            "-analyzeduration", "0",
-            "-probesize", "32",
-            "-f", "v4l2",
-            "-input_format", "mjpeg",
-            "-framerate", "30",
-            "-video_size", f"{self._width}x{self._height}",
-            "-i", self._device,
-            "-c:v", "copy",
-            "-f", "image2pipe", "pipe:1",
-        ]
+
+        if self._has_mjpeg:
+            cmd = [
+                "ffmpeg",
+                "-fflags", "nobuffer",
+                "-flags", "low_delay",
+                "-analyzeduration", "0",
+                "-probesize", "32",
+                "-f", "v4l2",
+                "-input_format", "mjpeg",
+                "-framerate", str(self._fps),
+                "-video_size", f"{self._width}x{self._height}",
+                "-i", self._device,
+                "-c:v", "copy",
+                "-f", "image2pipe", "pipe:1",
+            ]
+        else:
+            # YUYV device — encode to MJPEG (no hardware copy available).
+            cmd = [
+                "ffmpeg",
+                "-fflags", "nobuffer",
+                "-flags", "low_delay",
+                "-analyzeduration", "0",
+                "-probesize", "32",
+                "-f", "v4l2",
+                "-input_format", "yuyv422",
+                "-framerate", str(self._fps),
+                "-video_size", f"{self._width}x{self._height}",
+                "-i", self._device,
+                "-c:v", "mjpeg",
+                "-q:v", "5",
+                "-f", "image2pipe", "pipe:1",
+            ]
         try:
             self._ffmpeg_proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 bufsize=0)
-            # Drain stderr in a background thread so the pipe doesn't fill.
-            self._stderr_lines: List[str] = []
+            self._stderr_lines = []
+
             def _drain_stderr():
                 try:
                     for line in self._ffmpeg_proc.stderr:
@@ -393,7 +337,9 @@ class CameraModule(RobotModule):
                             self._stderr_lines.pop(0)
                 except Exception:
                     pass
-            t = threading.Thread(target=_drain_stderr, daemon=True, name="cam-stderr")
+
+            t = threading.Thread(target=_drain_stderr, daemon=True,
+                                 name=f"cam-stderr-{_os.path.basename(self._device)}")
             t.start()
             self._last_frame_time = time.time()
             log.info("[Camera] ffmpeg started (pid=%d) on %s → MJPEG pipe",
@@ -403,33 +349,29 @@ class CameraModule(RobotModule):
             self._ffmpeg_proc = None
 
     def _kill_ffmpeg(self) -> None:
-        if self._ffmpeg_proc:
-            # Dump any accumulated stderr for diagnostics.
-            stderr_lines = getattr(self, "_stderr_lines", []) or []
-            if stderr_lines:
-                log.warning("[Camera] ffmpeg stderr (last 5 lines):\n%s",
-                            "\n".join(stderr_lines[-5:]))
-                self._stderr_lines = []
-            try:
-                self._ffmpeg_proc.kill()
-                self._ffmpeg_proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                log.warning("[Camera] ffmpeg kill timed out — force-releasing %s", self._device)
-                import os
-                os.system(f"fuser -k {self._device} 2>/dev/null")
-            except Exception:
-                pass
-            self._ffmpeg_proc = None
+        if not self._ffmpeg_proc:
+            return
+        if self._stderr_lines:
+            log.warning("[Camera] ffmpeg stderr for %s (last 5 lines):\n%s",
+                        self._device, "\n".join(self._stderr_lines[-5:]))
+            self._stderr_lines = []
+        try:
+            self._ffmpeg_proc.kill()
+            self._ffmpeg_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            log.warning("[Camera] ffmpeg kill timed out — force-releasing %s",
+                        self._device)
+            _os.system(f"fuser -k {self._device} 2>/dev/null")
+        except Exception:
+            pass
+        self._ffmpeg_proc = None
+
+    # ── internals: frame loop ──────────────────────────────────────────
 
     def _frame_loop(self) -> None:
-        """Read MJPEG frames from ffmpeg stdout, broadcast, watch for signal loss.
-
-        Uses select() with a 1-second timeout so that signal-loss detection
-        can run even when ffmpeg produces no output (the old blocking-read
-        design would hang forever on a silent ffmpeg).
-        """
+        """Read MJPEG frames from ffmpeg stdout, broadcast, watch for signal loss."""
         import select as _select
-        import os as _os
+
         buf = b""
         frame_n = 0
         while self._running:
@@ -439,7 +381,6 @@ class CameraModule(RobotModule):
                 continue
             fd = proc.stdout.fileno()
 
-            # Wait up to 1 s for data; wake periodically to check health.
             try:
                 ready, _, _ = _select.select([fd], [], [], 1.0)
             except (ValueError, OSError, AttributeError):
@@ -447,44 +388,46 @@ class CameraModule(RobotModule):
                 continue
 
             if not ready:
-                # No data within 1 s — check that ffmpeg is still alive.
                 if proc.poll() is not None:
                     if self._running:
                         self._restart_count += 1
-                        log.warning("[Camera] ffmpeg exited (restart #%d)", self._restart_count)
+                        log.warning("[Camera] ffmpeg exited (restart #%d) on %s",
+                                    self._restart_count, self._device)
                         if self._restart_count >= _MAX_RESTARTS:
-                            self._cycle_device()
+                            _reset_usb_device(self._device)
+                            self._restart_count = 0
                         time.sleep(1)
                         self._start_ffmpeg()
                         buf = b""
                         frame_n = 0
                     continue
-                # Alive but silent — watch for signal loss.
                 if self._last_frame_time > 0:
                     elapsed = time.time() - self._last_frame_time
                     if elapsed > _FRAME_TIMEOUT:
-                        log.warning("[Camera] signal lost — %.1fs since last frame, restarting", elapsed)
+                        log.warning("[Camera] signal lost — %.1fs since last frame, restarting %s",
+                                    elapsed, self._device)
                         self._restart_count += 1
                         if self._restart_count >= _MAX_RESTARTS:
-                            self._cycle_device()
+                            _reset_usb_device(self._device)
+                            self._restart_count = 0
                         self._start_ffmpeg()
                         buf = b""
                         frame_n = 0
                 continue
 
-            # Data waiting — read it.
             try:
                 chunk = _os.read(fd, 65536)
             except (OSError, ValueError):
                 chunk = None
 
             if not chunk:
-                # EOF — ffmpeg pipe closed.
                 if self._running:
                     self._restart_count += 1
-                    log.warning("[Camera] ffmpeg exited (restart #%d)", self._restart_count)
+                    log.warning("[Camera] ffmpeg exited (restart #%d) on %s",
+                                self._restart_count, self._device)
                     if self._restart_count >= _MAX_RESTARTS:
-                        self._cycle_device()
+                        _reset_usb_device(self._device)
+                        self._restart_count = 0
                     time.sleep(1)
                     self._start_ffmpeg()
                     buf = b""
@@ -508,17 +451,247 @@ class CameraModule(RobotModule):
                     self._last_frame_time = time.time()
                     self._cond.notify_all()
                 if frame_n % 150 == 1:
-                    log.info("[Camera] frame #%d (%d bytes), %d client(s)",
-                             frame_n, len(frame), self.client_count())
-
-    # ── helpers ─────────────────────────────────────────────────────────
+                    log.info("[Camera] %s frame #%d (%d bytes), %d client(s)",
+                             self._device, frame_n, len(frame), self.client_count())
 
     def _ensure_running(self) -> None:
         with self._cond:
-            need_start = self._ffmpeg_proc is None or self._ffmpeg_proc.poll() is not None
+            need_start = (self._ffmpeg_proc is None
+                          or self._ffmpeg_proc.poll() is not None)
         if need_start:
             self._start_ffmpeg()
         if not self._running:
             self._running = True
-            t = threading.Thread(target=self._frame_loop, daemon=True, name="cam-loop")
+            t = threading.Thread(target=self._frame_loop, daemon=True,
+                                 name=f"cam-loop-{_os.path.basename(self._device)}")
             t.start()
+
+
+# ── CameraModule (multi-device coordinator) ────────────────────────────────
+
+class CameraModule(RobotModule):
+    """Multi-camera coordinator — manages N _CameraDeviceStream instances."""
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        cfg = config or {}
+        # Resolve which devices to activate.
+        self._wanted_devices: List[str] = []
+        self._auto_all: bool = False
+        if "devices" in cfg:
+            self._wanted_devices = cfg["devices"]
+        elif cfg.get("auto_all"):
+            self._auto_all = True
+        elif "device" in cfg:
+            self._wanted_devices = [cfg["device"]]
+        # else: auto-best (single MJPEG device)
+
+        self._width = int(cfg.get("width", 800))
+        self._height = int(cfg.get("height", 600))
+        self._fps = int(cfg.get("fps", 30))
+
+        self._streams: Dict[str, _CameraDeviceStream] = {}  # device_path → stream
+        self._available_devices: List[str] = []
+        self._running = False
+        self._hotplug_active = False
+
+    # ── RobotModule metadata ─────────────────────────────────────────────
+
+    @property
+    def name(self) -> str:
+        return "camera"
+
+    @property
+    def display_name(self) -> str:
+        return "摄像头"
+
+    def get_state_schema(self) -> Dict[str, Any]:
+        return {"connected": False, "devices": {}, "available": []}
+
+    def get_socketio_handlers(self) -> Dict[str, Callable]:
+        return {
+            "camera_reset": self._handle_camera_reset,
+            "camera_list_devices": self._handle_list_devices,
+        }
+
+    # ── lifecycle ───────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._available_devices = _sort_cameras_by_format(_detect_cameras())
+        if not self._available_devices:
+            log.warning("[Camera] No video capture devices found!")
+            t = threading.Thread(target=self._hotplug_watch, daemon=True,
+                                 name="cam-hotplug")
+            t.start()
+            self._hotplug_active = True
+            return
+        log.info("[Camera] devices found: %s", self._available_devices)
+        active = self._resolve_active_devices()
+        log.info("[Camera] activating streams for: %s", active)
+        for dev in active:
+            self._ensure_stream(dev)
+
+    def stop(self) -> None:
+        self._running = False
+        self._hotplug_active = False
+        for s in list(self._streams.values()):
+            s.stop()
+        self._streams.clear()
+        log.info("[Camera] Module stopped")
+
+    def emergency_stop(self) -> None:
+        self.stop()
+
+    def _hotplug_watch(self) -> None:
+        """Periodically re-scan for USB cameras (hotplug detection)."""
+        while self._hotplug_active:
+            time.sleep(10)
+            devices = _detect_cameras()
+            if devices:
+                log.info("[Camera] Hotplug detected: %s — restarting", devices)
+                self._available_devices = devices
+                active = self._resolve_active_devices()
+                for dev in active:
+                    self._ensure_stream(dev)
+                return
+
+    # ── device resolution ──────────────────────────────────────────────
+
+    def _resolve_active_devices(self) -> List[str]:
+        """Which devices should be streaming, based on config."""
+        if self._wanted_devices:
+            return [d for d in self._wanted_devices if d in self._available_devices]
+        if self._auto_all:
+            # Activate only MJPEG-capable devices (others can't do -c:v copy).
+            mjpeg = [d for d in self._available_devices if _device_has_mjpeg(d)]
+            if mjpeg:
+                return mjpeg
+            # Fallback: best single device.
+            return [self._available_devices[0]] if self._available_devices else []
+        # Default: single best (first after MJPEG sort).
+        return [self._available_devices[0]] if self._available_devices else []
+
+    def _ensure_stream(self, device_path: str) -> _CameraDeviceStream:
+        if device_path not in self._streams:
+            s = _CameraDeviceStream(device_path, self._width, self._height, self._fps)
+            s.start()
+            self._streams[device_path] = s
+            log.info("[Camera] stream created for %s", device_path)
+        return self._streams[device_path]
+
+    def _device_key(self, device_path: str) -> str:
+        return _os.path.basename(device_path)
+
+    def _resolve_device_path(self, name: str) -> Optional[str]:
+        """Resolve a short name (e.g. 'video6') or absolute path to device path."""
+        if name.startswith("/dev/"):
+            return name if name in self._available_devices else None
+        for d in self._available_devices:
+            if self._device_key(d) == name:
+                return d
+        # Also check currently active streams (device may have been hotplugged).
+        for d in self._streams:
+            if self._device_key(d) == name:
+                return d
+        return None
+
+    # ── subscriber API (device-aware) ──────────────────────────────────
+
+    def subscribe(self, device_name: str = "") -> int:
+        """Return a client-id.  Falls back to first active device if no name given."""
+        if not device_name:
+            # Backward compat: use first active stream.
+            if self._streams:
+                device_name = self._device_key(next(iter(self._streams)))
+            else:
+                raise ValueError("No camera devices active")
+        device_path = self._resolve_device_path(device_name)
+        if not device_path:
+            raise ValueError(f"Unknown camera device: {device_name}")
+        stream = self._ensure_stream(device_path)
+        return stream.subscribe()
+
+    def unsubscribe(self, device_name: str, cid: int) -> None:
+        device_path = self._resolve_device_path(device_name)
+        if device_path and device_path in self._streams:
+            self._streams[device_path].unsubscribe(cid)
+
+    def wait_frame(self, device_name: str, cid: int, timeout: float = 5.0
+                   ) -> Tuple[Optional[bytes], int]:
+        device_path = self._resolve_device_path(device_name)
+        if not device_path or device_path not in self._streams:
+            return None, 0
+        return self._streams[device_path].wait_frame(cid, timeout)
+
+    def total_clients(self) -> int:
+        return sum(s.client_count() for s in self._streams.values())
+
+    # ── state ──────────────────────────────────────────────────────────
+
+    def get_state(self) -> Dict[str, Any]:
+        devices_state = {}
+        for dev_path, stream in self._streams.items():
+            key = self._device_key(dev_path)
+            devices_state[key] = stream.get_state()
+
+        # Backward compat: top-level fields from first active stream.
+        first = next(iter(self._streams.values()), None)
+        return {
+            "connected": len(self._streams) > 0 and any(
+                s.get_state()["connected"] for s in self._streams.values()),
+            "client_count": self.total_clients(),
+            "device": self._device_key(first._device) if first else "",
+            "signal": first.get_state()["signal"] if first else "stopped",
+            "devices": devices_state,
+            "available": [self._device_key(d) for d in self._available_devices],
+        }
+
+    # ── device listing for frontend ────────────────────────────────────
+
+    def get_device_list(self) -> List[Dict[str, Any]]:
+        result = []
+        for d in self._available_devices:
+            key = self._device_key(d)
+            stream = self._streams.get(d)
+            result.append({
+                "id": key,
+                "path": d,
+                "active": stream is not None,
+                "streaming": stream is not None and stream.client_count() > 0,
+            })
+        # Also include any active stream devices that may no longer be in
+        # available_devices (e.g. after USB reset renumbering).
+        for d, stream in self._streams.items():
+            if d not in self._available_devices:
+                key = self._device_key(d)
+                result.append({
+                    "id": key,
+                    "path": d,
+                    "active": True,
+                    "streaming": stream.client_count() > 0,
+                })
+        return result
+
+    # ── SocketIO handlers ──────────────────────────────────────────────
+
+    def _handle_list_devices(self, data: dict, emit) -> None:
+        emit("camera_device_list", {"devices": self.get_device_list()})
+
+    def _handle_camera_reset(self, data: dict, emit) -> None:
+        device_name = data.get("device", "")
+        if device_name:
+            device_path = self._resolve_device_path(device_name)
+            if device_path and device_path in self._streams:
+                log.info("[Camera] Manual reset: %s", device_name)
+                self._streams[device_path].force_restart()
+                emit("camera_reset_result", {"ok": True, "device": device_name})
+            else:
+                emit("camera_reset_result", {"ok": False, "msg": f"Unknown device: {device_name}"})
+        else:
+            # Reset all streams.
+            log.info("[Camera] Manual reset: all streams")
+            for s in self._streams.values():
+                s.force_restart()
+            emit("camera_reset_result", {"ok": True})

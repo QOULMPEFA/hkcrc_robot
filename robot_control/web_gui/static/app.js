@@ -35,6 +35,10 @@ socket.on("connected", (info) => {
   ACTIVE_MODULES = info.modules || [];
   _renderSidebar();
   LayoutManager.populateSelector();
+  // Request camera device list for any open panels
+  if (ACTIVE_MODULES.includes("camera")) {
+    socket.emit("camera_list_devices");
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -56,7 +60,18 @@ function _renderSidebar() {
       <span class="module-name">${_modName(meta)}${stubTag}</span>
       <span class="module-status" id="mod-status-${mod}"></span>
     `;
-    if (!isOpen) {
+    if (mod === "camera") {
+      // Multi-camera: always open a new panel
+      item.addEventListener("click", () => {
+        PanelManager.open(mod);
+        _renderSidebar();
+      });
+      if (isOpen) {
+        const count = PanelManager.countOpen(mod);
+        const nameEl = item.querySelector(".module-name");
+        if (nameEl) nameEl.dataset.count = count;
+      }
+    } else if (!isOpen) {
       item.addEventListener("click", () => {
         PanelManager.open(mod);
         _renderSidebar();
@@ -168,6 +183,12 @@ const PanelManager = {
     return false;
   },
 
+  countOpen(module) {
+    let n = 0;
+    this._panels.forEach(p => { if (p.module === module) n++; });
+    return n;
+  },
+
   toggleMinimize(id) {
     const p = this._panels.get(id);
     if (!p) return;
@@ -193,6 +214,7 @@ const PanelManager = {
         module: panel.dataset.module,
         size: panel.dataset.size || "medium",
         minimized: panel.classList.contains("minimized"),
+        camDevice: panel.dataset.camDevice || "",
       });
     });
     return { panels };
@@ -204,6 +226,15 @@ const PanelManager = {
     layout.panels.forEach((p) => {
       const id = this.open(p.module, p.size || "medium");
       if (p.minimized) this.toggleMinimize(id);
+      // Restore camera device selection
+      if (p.camDevice && p.module === "camera") {
+        const panel = document.getElementById(id);
+        if (panel) panel.dataset.camDevice = p.camDevice;
+        setTimeout(() => {
+          const sel = document.getElementById(id + "-cam-device");
+          if (sel) { sel.value = p.camDevice; sel.dispatchEvent(new Event("change")); }
+        }, 200);
+      }
     });
     _renderSidebar();
   },
@@ -719,9 +750,16 @@ function _cleanupPanel(panelId, module) {
 // ── Camera Panel ──────────────────────────────────────────────────────────────
 
 function _renderCameraPanel(panelId, body) {
+  const panel = document.getElementById(panelId);
   body.innerHTML = `
+    <div class="cam-device-row">
+      <label class="cam-device-label">${I18n.t("camera.select_device")}</label>
+      <select id="${panelId}-cam-device" class="cam-device-select">
+        <option value="">-- ${I18n.t("camera.select_device")} --</option>
+      </select>
+    </div>
     <div class="camera-wrap" id="${panelId}-cam-wrap">
-      <img id="${panelId}-cam-img" src="/stream" alt="camera" />
+      <img id="${panelId}-cam-img" src="" alt="camera" style="display:none" />
       <div class="camera-error" id="${panelId}-cam-err" style="display:none">${I18n.t("camera.offline")}</div>
     </div>
     <div class="cam-status-line" id="${panelId}-cam-status">${I18n.t("camera.status")}</div>
@@ -730,23 +768,49 @@ function _renderCameraPanel(panelId, body) {
     </div>
   `;
 
+  const deviceSel = el(panelId + "-cam-device");
   const img = el(panelId + "-cam-img");
   const err = el(panelId + "-cam-err");
+
+  // Restore device from dataset if set during layout restore
+  if (panel && panel.dataset.camDevice) {
+    deviceSel.value = panel.dataset.camDevice;
+  }
+
+  // Device selection → update img src
+  if (deviceSel) {
+    deviceSel.addEventListener("change", () => {
+      const dev = deviceSel.value;
+      if (panel) panel.dataset.camDevice = dev;
+      if (dev) {
+        img.src = "/stream/" + dev + "?_t=" + Date.now();
+        img.style.display = "block";
+        if (err) err.style.display = "none";
+      } else {
+        img.src = "";
+        img.style.display = "none";
+      }
+    });
+  }
 
   if (img) {
     img.addEventListener("error", () => { img.style.display = "none"; if (err) err.style.display = "flex"; });
     img.addEventListener("load", () => { img.style.display = "block"; if (err) err.style.display = "none"; });
   }
 
-  // Camera reset button
+  // Camera reset button (per-device)
   const btnReset = el(panelId + "-cam-reset");
   if (btnReset) {
     btnReset.addEventListener("click", () => {
       btnReset.disabled = true;
       btnReset.textContent = I18n.t("camera.resetting");
-      socket.emit("camera_reset");
+      const dev = (panel && panel.dataset.camDevice) || "";
+      socket.emit("camera_reset", { device: dev });
     });
   }
+
+  // Request device list to populate dropdown
+  socket.emit("camera_list_devices");
 }
 
 // ── UGV Panel ─────────────────────────────────────────────────────────────────
@@ -1171,10 +1235,47 @@ function _updateCameraStatus(panelId, state) {
 }
 
 socket.on("camera_reset_result", (data) => {
-  // Find all camera panel reset buttons and re-enable them
+  const resetDevice = (data && data.device) || "";
+  // Find all camera panel reset buttons and re-enable matching ones
   document.querySelectorAll("[id$='-cam-reset']").forEach((btn) => {
-    btn.disabled = false;
-    btn.textContent = I18n.t("camera.reset");
+    // Find parent panel to check device match
+    const panel = btn.closest(".panel");
+    const panelDevice = panel ? (panel.dataset.camDevice || "") : "";
+    if (!resetDevice || panelDevice === resetDevice || !panelDevice) {
+      btn.disabled = false;
+      btn.textContent = I18n.t("camera.reset");
+    }
+  });
+});
+
+socket.on("camera_device_list", (data) => {
+  const devices = data.devices || [];
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "camera") return;
+    const sel = el(panelId + "-cam-device");
+    if (!sel) return;
+    const currentVal = sel.value;
+    sel.innerHTML = '<option value="">-- ' + I18n.t("camera.select_device") + ' --</option>';
+    devices.forEach((d) => {
+      const opt = document.createElement("option");
+      opt.value = d.id;
+      let label = d.id;
+      if (d.active) label += " ✓";
+      if (d.streaming) label += " ⚬";
+      opt.textContent = label;
+      sel.appendChild(opt);
+    });
+    // Restore previous value
+    if (currentVal && devices.some(d => d.id === currentVal)) {
+      sel.value = currentVal;
+    } else {
+      // Auto-select first active device
+      const firstActive = devices.find(d => d.active);
+      if (firstActive) {
+        sel.value = firstActive.id;
+        sel.dispatchEvent(new Event("change"));
+      }
+    }
   });
 });
 
@@ -1217,8 +1318,16 @@ socket.on("robot_state", (s) => {
         break;
       case "camera":
         PanelManager.updateStatus("camera", modState.connected, false);
-	        // Update camera status line with signal info
-	        _updateCameraStatus(panelId, modState);
+        // Per-device state: look up the panel's selected device
+        {
+          const panel = document.getElementById(panelId);
+          const dev = panel ? (panel.dataset.camDevice || "") : "";
+          if (dev && modState.devices && modState.devices[dev]) {
+            _updateCameraStatus(panelId, modState.devices[dev]);
+          } else {
+            _updateCameraStatus(panelId, modState);
+          }
+        }
         break;
       case "motor":
         _updateMotorState(panelId, modState);

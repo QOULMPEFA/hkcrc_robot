@@ -68,7 +68,7 @@ def _require_role(min_role: str) -> bool:
     return True
 
 
-# ── Camera stream endpoint (uses CameraModule if loaded) ──────────────────────
+# ── Camera stream endpoints (uses CameraModule if loaded) ──────────────────────
 
 def _camera_module():
     """Return the camera module instance, or None."""
@@ -77,38 +77,58 @@ def _camera_module():
     return None
 
 
-def _gen_client_stream(cid):
-    """Yield latest frames via condition variable — zero buffering, always fresh."""
+def _gen_device_stream(device_name, cid):
+    """Yield latest frames for a specific device — zero buffering, always fresh."""
     cam = _camera_module()
     count = 0
     try:
         while True:
-            frame, _seq = cam.wait_frame(cid, timeout=5)
+            frame, _seq = cam.wait_frame(device_name, cid, timeout=5)
             if frame is None:
-                log.info("[Camera] /stream: timeout — sent %d frames", count)
+                log.info("[Camera] /stream/%s: timeout — sent %d frames", device_name, count)
                 return
             count += 1
             yield frame
     except GeneratorExit:
-        log.info("[Camera] /stream: client disconnected — sent %d frames", count)
+        log.info("[Camera] /stream/%s: client disconnected — sent %d frames", device_name, count)
         raise
+
+
+@app.route("/stream/<device_name>")
+@auth.login_required
+def camera_device_stream(device_name):
+    cam = _camera_module()
+    if not cam:
+        return Response("Camera module not loaded", status=503)
+    try:
+        cid = cam.subscribe(device_name)
+    except ValueError:
+        return Response(f"Unknown device: {device_name}", status=404)
+    log.info("[Camera] /stream/%s: client subscribed (total=%d)",
+             device_name, cam.total_clients())
+    def generate():
+        try:
+            yield from _gen_device_stream(device_name, cid)
+        finally:
+            cam.unsubscribe(device_name, cid)
+            log.info("[Camera] /stream/%s: client unsubscribed (total=%d)",
+                     device_name, cam.total_clients())
+    return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
 @app.route("/stream")
 @auth.login_required
 def camera_stream():
+    """Legacy endpoint — delegates to the first active device stream."""
     cam = _camera_module()
     if not cam:
         return Response("Camera module not loaded", status=503)
-    cid = cam.subscribe()
-    log.info("[Camera] /stream: client subscribed (clients=%d)", cam.client_count())
-    def generate():
-        try:
-            yield from _gen_client_stream(cid)
-        finally:
-            cam.unsubscribe(cid)
-            log.info("[Camera] /stream: client unsubscribed (clients=%d)", cam.client_count())
-    return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    devices = cam.get_device_list()
+    active = [d for d in devices if d.get("active")]
+    if not active:
+        return Response("No camera devices active", status=503)
+    first = active[0]["id"]
+    return redirect(url_for("camera_device_stream", device_name=first))
 
 
 # ── SRS WebRTC API proxy ────────────────────────────────────────────────────
@@ -148,7 +168,7 @@ def _camera_watchdog():
             if not cam:
                 continue
             timeout_sec = float(auth.get_setting("camera_timeout_min", "5")) * 60
-            no_subs = cam.client_count() == 0
+            no_subs = cam.total_clients() == 0
             no_activity = (time.time() - _last_activity) > timeout_sec
             if no_subs and no_activity:
                 log.info("[Camera] Watchdog: stopping ffmpeg (idle)")
@@ -429,7 +449,7 @@ def main():
         "arm":    {"host": "192.168.56.101"},
         "ugv":    {"host": "127.0.0.1", "port": 9100},
         "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
-        "camera": {"device": "/dev/video0"},
+        "camera": {"devices": ["/dev/video6", "/dev/video4"]},
         "motor":  {},
         "hand":   {"protocol": "modbus", "port": None, "baudrate": 115200, "slave_id": 0x7E},
     }
