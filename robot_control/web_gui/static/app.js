@@ -412,6 +412,287 @@ const LayoutManager = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Key Binding Manager
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _getActivePanelId(module) {
+  for (const [id, p] of PanelManager._panels) {
+    if (p.module === module) return id;
+  }
+  return null;
+}
+
+const KeyBindingManager = {
+  _LS_KEY: "robot_key_bindings",
+  _bindings: {},
+  _heldKeys: new Set(),
+  _holdTimers: {},
+  _listeningFor: null,
+  _onBoundCb: null,
+
+  _defaults: {
+    "w":          "motor.forward",
+    "a":          "motor.left",
+    "s":          "motor.backward",
+    "d":          "motor.right",
+    " ":          "motor.stop",
+    "arrowup":    "motor.forward",
+    "arrowdown":  "motor.backward",
+    "arrowleft":  "motor.left",
+    "arrowright": "motor.right",
+  },
+
+  _actions: {
+    "motor.forward":   { type:"hold", module:"motor", descKey:"motor.forward",
+                         startFn: ()=>socket.emit("motor_forward"),
+                         stopFn:  ()=>socket.emit("motor_stop"), interval:50 },
+    "motor.backward":  { type:"hold", module:"motor", descKey:"motor.backward",
+                         startFn: ()=>socket.emit("motor_backward"),
+                         stopFn:  ()=>socket.emit("motor_stop"), interval:50 },
+    "motor.left":      { type:"hold", module:"motor", descKey:"motor.left",
+                         startFn: ()=>socket.emit("motor_left"),
+                         stopFn:  ()=>socket.emit("motor_stop"), interval:50 },
+    "motor.right":     { type:"hold", module:"motor", descKey:"motor.right",
+                         startFn: ()=>socket.emit("motor_right"),
+                         stopFn:  ()=>socket.emit("motor_stop"), interval:50 },
+    "motor.stop":      { type:"click", module:"motor", descKey:"motor.stop",
+                         fn: ()=>socket.emit("motor_stop") },
+
+    "ugv.forward":     { type:"hold", module:"ugv", descKey:"motor.forward",
+                         startFn: ()=>{ const p=_getActivePanelId("ugv"); if(!p)return; const slL=el(p+"-sl-linear"),slA=el(p+"-sl-angular"); socket.emit("ugv_velocity",{linear:1.0*parseFloat(slL?.value||0.5),angular:0}); },
+                         stopFn:  ()=>socket.emit("ugv_stop"), interval:50 },
+    "ugv.backward":    { type:"hold", module:"ugv", descKey:"motor.backward",
+                         startFn: ()=>{ const p=_getActivePanelId("ugv"); if(!p)return; const slL=el(p+"-sl-linear"); socket.emit("ugv_velocity",{linear:-1.0*parseFloat(slL?.value||0.5),angular:0}); },
+                         stopFn:  ()=>socket.emit("ugv_stop"), interval:50 },
+    "ugv.left":        { type:"hold", module:"ugv", descKey:"motor.left",
+                         startFn: ()=>{ const p=_getActivePanelId("ugv"); if(!p)return; const slA=el(p+"-sl-angular"); socket.emit("ugv_velocity",{linear:0,angular:1.0*parseFloat(slA?.value||0.5)}); },
+                         stopFn:  ()=>socket.emit("ugv_stop"), interval:50 },
+    "ugv.right":       { type:"hold", module:"ugv", descKey:"motor.right",
+                         startFn: ()=>{ const p=_getActivePanelId("ugv"); if(!p)return; const slA=el(p+"-sl-angular"); socket.emit("ugv_velocity",{linear:0,angular:-1.0*parseFloat(slA?.value||0.5)}); },
+                         stopFn:  ()=>socket.emit("ugv_stop"), interval:50 },
+    "ugv.stop":        { type:"click", module:"ugv", descKey:"motor.stop",
+                         fn: ()=>socket.emit("ugv_stop") },
+    "ugv.enable":      { type:"click", module:"ugv", descKey:"ugv.enable_can",
+                         fn: ()=>{ socket.emit("ugv_enable"); } },
+    "ugv.reset":       { type:"click", module:"ugv", descKey:"ugv.clear_fault",
+                         fn: ()=>socket.emit("ugv_reset") },
+    "ugv.restart_can": { type:"click", module:"ugv", descKey:"ugv.restart_can",
+                         fn: ()=>{ socket.emit("restart_can"); } },
+
+    "lift.move":       { type:"click", module:"lift", descKey:"lift.move",
+                         fn: ()=>{ const p=_getActivePanelId("lift"); if(!p)return; socket.emit("lift_move",{height_mm:parseFloat(el(p+"-lift-target")?.value||0),speed_mm_s:parseFloat(el(p+"-lift-speed")?.value||10)}); } },
+    "lift.stop":       { type:"click", module:"lift", descKey:"lift.stop",
+                         fn: ()=>socket.emit("lift_stop") },
+    "lift.home":       { type:"click", module:"lift", descKey:"lift.home",
+                         fn: ()=>{ const p=_getActivePanelId("lift"); if(!p)return; socket.emit("lift_move",{height_mm:0.0,speed_mm_s:parseFloat(el(p+"-lift-speed")?.value||10)}); } },
+    "lift.reset":      { type:"click", module:"lift", descKey:"lift.reset_fault",
+                         fn: ()=>socket.emit("lift_reset_fault") },
+
+    "arm.enable":      { type:"click", module:"arm", descKey:"arm.enable",
+                         fn: ()=>socket.emit("arm_enable") },
+    "arm.disable":     { type:"click", module:"arm", descKey:"arm.disable",
+                         fn: ()=>socket.emit("arm_disable") },
+    "arm.home":        { type:"click", module:"arm", descKey:"arm.home",
+                         fn: ()=>socket.emit("arm_home") },
+    "arm.stop":        { type:"click", module:"arm", descKey:"arm.stop",
+                         fn: ()=>socket.emit("arm_stop") },
+    "arm.reset":       { type:"click", module:"arm", descKey:"arm.reset",
+                         fn: ()=>socket.emit("arm_reset_fault") },
+
+    "hand.open":       { type:"click", module:"hand", descKey:"hand.open",
+                         fn: ()=>socket.emit("hand_open") },
+    "hand.close":      { type:"click", module:"hand", descKey:"hand.close",
+                         fn: ()=>socket.emit("hand_close") },
+    "hand.pinch":      { type:"click", module:"hand", descKey:"hand.pinch",
+                         fn: ()=>socket.emit("hand_pinch") },
+    "hand.send":       { type:"click", module:"hand", descKey:"hand.send",
+                         fn: ()=>{ const p=_getActivePanelId("hand"); if(!p)return; const pos=[0,1,2,3,4].map(i=>{const inp=el(p+`-hand-f${i}`);return inp?parseFloat(inp.value):0}); socket.emit("hand_set_fingers",{positions:pos,speed_pct:50}); } },
+
+    "global.estop":    { type:"click", module:"global", descKey:"header.estop",
+                         fn: ()=>{ const btn=el("btn-estop"); if(btn) btn.click(); } },
+    "global.reboot":   { type:"click", module:"global", descKey:"header.reboot",
+                         fn: ()=>_showPowerConfirm("reboot") },
+    "global.shutdown": { type:"click", module:"global", descKey:"header.shutdown",
+                         fn: ()=>_showPowerConfirm("shutdown") },
+  },
+
+  init() {
+    this.load();
+    document.addEventListener("keydown", this._onKeyDown.bind(this));
+    document.addEventListener("keyup", this._onKeyUp.bind(this));
+    window.addEventListener("blur", () => { this._heldKeys.forEach(k => this._stopHold(k)); this._heldKeys.clear(); });
+  },
+
+  load() {
+    const saved = localStorage.getItem(this._LS_KEY);
+    let overrides = {};
+    if (saved) { try { overrides = JSON.parse(saved); } catch(e) {} }
+    this._bindings = Object.assign({}, this._defaults, overrides);
+  },
+
+  save() {
+    try { localStorage.setItem(this._LS_KEY, JSON.stringify(this._bindings)); } catch(e) {}
+  },
+
+  resetToDefaults() {
+    this._bindings = Object.assign({}, this._defaults);
+    this.save();
+  },
+
+  setBinding(key, actionId) {
+    if (!key || !actionId) return;
+    // Remove any existing binding for this key
+    for (const k of Object.keys(this._bindings)) {
+      if (this._bindings[k] === actionId) delete this._bindings[k];
+    }
+    this._bindings[key] = actionId;
+    this.save();
+  },
+
+  clearBinding(actionId) {
+    for (const k of Object.keys(this._bindings)) {
+      if (this._bindings[k] === actionId) { delete this._bindings[k]; break; }
+    }
+    this.save();
+  },
+
+  getKeyForAction(actionId) {
+    for (const [k, a] of Object.entries(this._bindings)) {
+      if (a === actionId) return k;
+    }
+    return null;
+  },
+
+  _canonicalKey(e) {
+    const k = e.key;
+    if (k.startsWith("Arrow")) return k.toLowerCase();
+    if (k === " ") return " ";
+    if (k.length === 1) return k.toLowerCase();
+    return k.toLowerCase();
+  },
+
+  beginRebind(actionId, cb) {
+    this._listeningFor = actionId;
+    this._onBoundCb = cb;
+  },
+
+  cancelRebind() {
+    this._listeningFor = null;
+    this._onBoundCb = null;
+  },
+
+  renderBindingsTable(tbody) {
+    if (!tbody) return;
+    const shown = new Set();
+    tbody.innerHTML = "";
+    ["motor","ugv","lift","arm","hand","global"].forEach(mod => {
+      if (mod !== "global" && !ACTIVE_MODULES.includes(mod)) return;
+      for (const [actionId, action] of Object.entries(this._actions)) {
+        if (action.module !== mod) continue;
+        const boundKey = this.getKeyForAction(actionId);
+        const displayKey = boundKey !== null ? boundKey : "—";
+        const emptyClass = boundKey === null ? " empty" : "";
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${I18n.t(action.descKey)}</td>
+          <td>${mod === "global" ? "—" : I18n.t("module." + mod)}</td>
+          <td><span class="bind-key-display${emptyClass}" id="bind-key-${actionId}">${displayKey === " " ? "␣" : displayKey}</span></td>
+          <td>
+            <button class="btn-bind" id="btn-bind-${actionId}" data-action="${actionId}" data-i18n="settings.bind_key">${I18n.t("settings.bind_key")}</button>
+            <button class="btn-bind-clear" id="btn-clear-${actionId}" data-action="${actionId}" data-i18n-title="settings.clear_binding" title="${I18n.t("settings.clear_binding")}">✕</button>
+          </td>`;
+        tbody.appendChild(tr);
+        shown.add(actionId);
+      }
+    });
+    // Attach event listeners
+    const self = this;
+    tbody.querySelectorAll(".btn-bind").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const actionId = btn.dataset.action;
+        btn.textContent = I18n.t("settings.press_key");
+        btn.classList.add("listening");
+        self.beginRebind(actionId, (result) => {
+          btn.classList.remove("listening");
+          if (result.status === "cancelled") {
+            btn.textContent = I18n.t("settings.bind_key");
+          } else {
+            // Rebuild table to show new binding
+            const tbodyEl = el("bind-table-body");
+            if (tbodyEl) self.renderBindingsTable(tbodyEl);
+          }
+        });
+      });
+    });
+    tbody.querySelectorAll(".btn-bind-clear").forEach(btn => {
+      btn.addEventListener("click", () => {
+        self.clearBinding(btn.dataset.action);
+        const tbodyEl = el("bind-table-body");
+        if (tbodyEl) self.renderBindingsTable(tbodyEl);
+      });
+    });
+  },
+
+  _onKeyDown(e) {
+    if (e.repeat) return;
+    // Skip when a modal overlay is visible (power confirm / settings)
+    if (el("power-overlay")?.style.display === "flex") return;
+    const tag = document.activeElement?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON") return;
+
+    const key = this._canonicalKey(e);
+
+    // If in rebind mode, capture this key
+    if (this._listeningFor !== null) {
+      e.preventDefault();
+      if (key === "escape") {
+        if (this._onBoundCb) this._onBoundCb({status:"cancelled"});
+      } else {
+        const actionId = this._listeningFor;
+        this.setBinding(key, actionId);
+        if (this._onBoundCb) this._onBoundCb({status:"done", key, actionId});
+      }
+      this._listeningFor = null;
+      this._onBoundCb = null;
+      return;
+    }
+
+    const actionId = this._bindings[key];
+    if (!actionId) return;
+    const action = this._actions[actionId];
+    if (!action) return;
+    e.preventDefault();
+
+    if (action.type === "hold") {
+      if (this._heldKeys.has(key)) return;
+      this._heldKeys.add(key);
+      action.startFn();
+      this._holdTimers[key] = setInterval(() => action.startFn(), action.interval || 50);
+    } else {
+      action.fn();
+    }
+  },
+
+  _onKeyUp(e) {
+    const key = this._canonicalKey(e);
+    if (this._heldKeys.has(key)) {
+      this._stopHold(key);
+    }
+  },
+
+  _stopHold(key) {
+    this._heldKeys.delete(key);
+    const timer = this._holdTimers[key];
+    if (timer) { clearInterval(timer); delete this._holdTimers[key]; }
+    const actionId = this._bindings[key];
+    if (actionId) {
+      const action = this._actions[actionId];
+      if (action && action.stopFn) action.stopFn();
+    }
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Panel Content Renderers
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -432,14 +713,8 @@ function _renderPanelContent(panelId, module) {
 }
 
 function _cleanupPanel(panelId, module) {
-  // Stop keyboard WASD when the UGV panel is closed
-  if (module === "ugv" && _ugvKeysActivePanel === panelId) {
-    _ugvKeysStop();
-  }
+  // Panel cleanup — KeyBindingManager handles keyboard safety via window blur
 }
-
-// Stop WASD when window loses focus (safety)
-window.addEventListener("blur", () => { if (_ugvKeysActivePanel) _ugvKeysStop(); });
 
 // ── Camera Panel ──────────────────────────────────────────────────────────────
 
@@ -450,6 +725,9 @@ function _renderCameraPanel(panelId, body) {
       <div class="camera-error" id="${panelId}-cam-err" style="display:none">${I18n.t("camera.offline")}</div>
     </div>
     <div class="cam-status-line" id="${panelId}-cam-status">${I18n.t("camera.status")}</div>
+    <div class="btn-row center" style="margin-top:6px">
+      <button class="btn-secondary" id="${panelId}-cam-reset">${I18n.t("camera.reset")}</button>
+    </div>
   `;
 
   const img = el(panelId + "-cam-img");
@@ -459,55 +737,19 @@ function _renderCameraPanel(panelId, body) {
     img.addEventListener("error", () => { img.style.display = "none"; if (err) err.style.display = "flex"; });
     img.addEventListener("load", () => { img.style.display = "block"; if (err) err.style.display = "none"; });
   }
+
+  // Camera reset button
+  const btnReset = el(panelId + "-cam-reset");
+  if (btnReset) {
+    btnReset.addEventListener("click", () => {
+      btnReset.disabled = true;
+      btnReset.textContent = I18n.t("camera.resetting");
+      socket.emit("camera_reset");
+    });
+  }
 }
 
 // ── UGV Panel ─────────────────────────────────────────────────────────────────
-// ── Keyboard WASD state ──────────────────────────────────────────────────────
-const _ugvKeys = { w: false, a: false, s: false, d: false };
-let _ugvKeysInterval = null;
-let _ugvKeysActivePanel = null;
-
-function _ugvKeysStart(panelId) {
-  _ugvKeysActivePanel = panelId;
-  if (_ugvKeysInterval) return;
-  _ugvKeysInterval = setInterval(() => {
-    if (!_ugvKeysActivePanel) return;
-    let lin = 0, ang = 0;
-    if (_ugvKeys.w) lin += 1;
-    if (_ugvKeys.s) lin -= 1;
-    if (_ugvKeys.a) ang += 1;
-    if (_ugvKeys.d) ang -= 1;
-    if (lin !== 0 || ang !== 0) {
-      const slLin  = el(_ugvKeysActivePanel + "-sl-linear");
-      const slAng  = el(_ugvKeysActivePanel + "-sl-angular");
-      lin *= parseFloat(slLin?.value || 0.5);
-      ang *= parseFloat(slAng?.value || 0.5);
-      socket.emit("ugv_velocity", { linear: lin, angular: ang });
-    } else {
-      socket.emit("ugv_stop");
-    }
-  }, 80);
-}
-
-function _ugvKeysStop() {
-  if (_ugvKeysInterval) { clearInterval(_ugvKeysInterval); _ugvKeysInterval = null; }
-  _ugvKeysActivePanel = null;
-  _ugvKeys.w = _ugvKeys.a = _ugvKeys.s = _ugvKeys.d = false;
-}
-
-document.addEventListener("keydown", (e) => {
-  if (!_ugvKeysActivePanel) return;
-  const tag = document.activeElement?.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-  const k = e.key.toLowerCase();
-  if (k in _ugvKeys) { e.preventDefault(); _ugvKeys[k] = true; }
-});
-
-document.addEventListener("keyup", (e) => {
-  const k = e.key.toLowerCase();
-  if (k in _ugvKeys) { e.preventDefault(); _ugvKeys[k] = false; }
-});
-
 
 function _renderUgvPanel(panelId, body) {
   const t = (k) => I18n.t(k);
@@ -520,20 +762,20 @@ function _renderUgvPanel(panelId, body) {
       <span>${t("ugv.angular_vel")}<b id="${panelId}-ugv-angular">—</b></span>
     </div>
     <div class="btn-row">
-      <button class="btn-primary ctrl"    id="${panelId}-ugv-enable">${t("ugv.enable_can")}</button>
-      <button class="btn-warn ctrl"       id="${panelId}-ugv-reset">${t("ugv.clear_fault")}</button>
-      <button class="btn-secondary"       id="${panelId}-restart-can">${t("ugv.restart_can")}</button>
+      <button class="btn-primary ctrl"    id="${panelId}-ugv-enable" data-bind-action="ugv.enable">${t("ugv.enable_can")}</button>
+      <button class="btn-warn ctrl"       id="${panelId}-ugv-reset" data-bind-action="ugv.reset">${t("ugv.clear_fault")}</button>
+      <button class="btn-secondary"       id="${panelId}-restart-can" data-bind-action="ugv.restart_can">${t("ugv.restart_can")}</button>
     </div>
     <div id="${panelId}-ugv-disabled-msg" style="text-align:center;padding:20px;color:var(--warn);font-size:14px">
       ${t("ugv.standby_warn")}
     </div>
     <div id="${panelId}-ugv-controls" style="display:none">
       <div class="dpad">
-        <button class="dpad-btn ctrl" data-l="1.0"  data-a="0.0">▲</button>
-        <button class="dpad-btn ctrl" data-l="0.0"  data-a="1.0">◄</button>
-        <button class="dpad-btn ctrl" data-l="0.0"  data-a="0.0">■</button>
-        <button class="dpad-btn ctrl" data-l="0.0"  data-a="-1.0">►</button>
-        <button class="dpad-btn ctrl" data-l="-1.0" data-a="0.0">▼</button>
+        <button class="dpad-btn ctrl" data-l="1.0"  data-a="0.0"  data-bind-action="ugv.forward"  data-bind-type="hold">▲</button>
+        <button class="dpad-btn ctrl" data-l="0.0"  data-a="1.0"  data-bind-action="ugv.left"     data-bind-type="hold">◄</button>
+        <button class="dpad-btn ctrl" data-l="0.0"  data-a="0.0"  data-bind-action="ugv.stop">■</button>
+        <button class="dpad-btn ctrl" data-l="0.0"  data-a="-1.0" data-bind-action="ugv.right"    data-bind-type="hold">►</button>
+        <button class="dpad-btn ctrl" data-l="-1.0" data-a="0.0"  data-bind-action="ugv.backward" data-bind-type="hold">▼</button>
       </div>
       <div style="text-align:center;color:var(--muted);font-size:11px;margin:8px 0">
         ${t("ugv.wasd_hint")}
@@ -589,7 +831,7 @@ function _renderUgvPanel(panelId, body) {
 
   const btnEn  = el(panelId + "-ugv-enable");
   const btnRst = el(panelId + "-ugv-reset");
-  if (btnEn)  btnEn.addEventListener("click",  () => { socket.emit("ugv_enable"); _ugvKeysStart(panelId); });
+  if (btnEn)  btnEn.addEventListener("click",  () => { socket.emit("ugv_enable"); });
   if (btnRst) btnRst.addEventListener("click", () => socket.emit("ugv_reset"));
 
   const btnCan = el(panelId + "-restart-can");
@@ -630,10 +872,10 @@ function _renderLiftPanel(panelId, body) {
       </label>
     </div>
     <div class="btn-row">
-      <button class="btn-primary ctrl"   id="${panelId}-lift-move">${t("lift.move")}</button>
-      <button class="btn-secondary ctrl" id="${panelId}-lift-stop">${t("lift.stop")}</button>
-      <button class="btn-secondary ctrl" id="${panelId}-lift-home">${t("lift.home")}</button>
-      <button class="btn-warn ctrl"      id="${panelId}-lift-reset">${t("lift.reset_fault")}</button>
+      <button class="btn-primary ctrl"   id="${panelId}-lift-move" data-bind-action="lift.move">${t("lift.move")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-lift-stop" data-bind-action="lift.stop">${t("lift.stop")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-lift-home" data-bind-action="lift.home">${t("lift.home")}</button>
+      <button class="btn-warn ctrl"      id="${panelId}-lift-reset" data-bind-action="lift.reset">${t("lift.reset_fault")}</button>
     </div>
     <div class="btn-row" id="${panelId}-lift-presets"></div>
     <div class="panel-diag">
@@ -713,11 +955,11 @@ function _renderArmPanel(panelId, body) {
     <div id="${panelId}-arm-collision-warn" class="collision-warn" style="display:none"></div>
     <div class="joint-grid" id="${panelId}-arm-joints"></div>
     <div class="btn-row">
-      <button class="btn-primary ctrl"   id="${panelId}-arm-enable">${t("arm.enable")}</button>
-      <button class="btn-secondary ctrl" id="${panelId}-arm-disable">${t("arm.disable")}</button>
-      <button class="btn-primary ctrl"   id="${panelId}-arm-home">${t("arm.home")}</button>
-      <button class="btn-secondary ctrl" id="${panelId}-arm-stop">${t("arm.stop")}</button>
-      <button class="btn-warn ctrl"      id="${panelId}-arm-reset">${t("arm.reset")}</button>
+      <button class="btn-primary ctrl"   id="${panelId}-arm-enable" data-bind-action="arm.enable">${t("arm.enable")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-arm-disable" data-bind-action="arm.disable">${t("arm.disable")}</button>
+      <button class="btn-primary ctrl"   id="${panelId}-arm-home" data-bind-action="arm.home">${t("arm.home")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-arm-stop" data-bind-action="arm.stop">${t("arm.stop")}</button>
+      <button class="btn-warn ctrl"      id="${panelId}-arm-reset" data-bind-action="arm.reset">${t("arm.reset")}</button>
     </div>
     <div class="panel-diag">
       <button id="${panelId}-btn-toggle-arm-log" class="btn-sm">${t("arm.log_toggle")}</button>
@@ -829,10 +1071,10 @@ function _renderHandPanel(panelId, body) {
     </div>
     <div class="finger-grid" id="${panelId}-hand-fingers"></div>
     <div class="btn-row">
-      <button class="btn-primary ctrl"   id="${panelId}-hand-open">${t("hand.open")}</button>
-      <button class="btn-primary ctrl"   id="${panelId}-hand-close">${t("hand.close")}</button>
-      <button class="btn-secondary ctrl" id="${panelId}-hand-pinch">${t("hand.pinch")}</button>
-      <button class="btn-secondary ctrl" id="${panelId}-hand-send">${t("hand.send")}</button>
+      <button class="btn-primary ctrl"   id="${panelId}-hand-open" data-bind-action="hand.open">${t("hand.open")}</button>
+      <button class="btn-primary ctrl"   id="${panelId}-hand-close" data-bind-action="hand.close">${t("hand.close")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-hand-pinch" data-bind-action="hand.pinch">${t("hand.pinch")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-hand-send" data-bind-action="hand.send">${t("hand.send")}</button>
     </div>
   `;
 
@@ -879,11 +1121,11 @@ function _renderMotorPanel(panelId, body) {
       <span>${t("motor.direction")}<b id="${panelId}-motor-direction">${t("motor.stop")}</b></span>
     </div>
     <div class="dpad motor-dpad">
-      <button class="dpad-btn ctrl" data-dir="forward">▲</button>
-      <button class="dpad-btn ctrl" data-dir="left">◄</button>
-      <button class="dpad-btn ctrl" data-dir="stop">■</button>
-      <button class="dpad-btn ctrl" data-dir="right">►</button>
-      <button class="dpad-btn ctrl" data-dir="backward">▼</button>
+      <button class="dpad-btn ctrl" data-dir="forward" data-bind-action="motor.forward" data-bind-type="hold">▲</button>
+      <button class="dpad-btn ctrl" data-dir="left" data-bind-action="motor.left" data-bind-type="hold">◄</button>
+      <button class="dpad-btn ctrl" data-dir="stop" data-bind-action="motor.stop">■</button>
+      <button class="dpad-btn ctrl" data-dir="right" data-bind-action="motor.right" data-bind-type="hold">►</button>
+      <button class="dpad-btn ctrl" data-dir="backward" data-bind-action="motor.backward" data-bind-type="hold">▼</button>
     </div>
   `;
 
@@ -916,6 +1158,25 @@ function _renderMotorPanel(panelId, body) {
     btn.addEventListener("pointercancel", stop);
   });
 }
+
+function _updateCameraStatus(panelId, state) {
+  const statusEl = el(panelId + "-cam-status");
+  const resetBtn = el(panelId + "-cam-reset");
+  if (!statusEl) return;
+  let text = I18n.t("camera.status");
+  if (state.signal === "lost") text = I18n.t("camera.status_lost");
+  else if (state.signal === "stale") text = I18n.t("camera.status_stale");
+  else if (state.signal === "waiting") text = I18n.t("camera.status_waiting");
+  statusEl.textContent = text;
+}
+
+socket.on("camera_reset_result", (data) => {
+  // Find all camera panel reset buttons and re-enable them
+  document.querySelectorAll("[id$='-cam-reset']").forEach((btn) => {
+    btn.disabled = false;
+    btn.textContent = I18n.t("camera.reset");
+  });
+});
 
 function _updateMotorState(panelId, s) {
   _maybeSet(el(panelId + "-motor-connected"), s.connected ? I18n.t("motor.connected") : I18n.t("motor.mock"));
@@ -956,6 +1217,8 @@ socket.on("robot_state", (s) => {
         break;
       case "camera":
         PanelManager.updateStatus("camera", modState.connected, false);
+	        // Update camera status line with signal info
+	        _updateCameraStatus(panelId, modState);
         break;
       case "motor":
         _updateMotorState(panelId, modState);
@@ -1004,12 +1267,6 @@ function _updateUgvState(panelId, s) {
   if (btnEn) {
     if (enabled) { btnEn.textContent = I18n.t("ugv.enabled"); btnEn.disabled = true; btnEn.style.opacity = "0.6"; }
     else        { btnEn.textContent = I18n.t("ugv.enable_can"); btnEn.disabled = false; btnEn.style.opacity = ""; }
-  }
-  // Keyboard WASD: start when enabled, stop when disabled
-  if (enabled && PanelManager.isOpen("ugv")) {
-    if (_ugvKeysActivePanel !== panelId) _ugvKeysStart(panelId);
-  } else if (_ugvKeysActivePanel === panelId) {
-    _ugvKeysStop();
   }
   _updateLogPanel(panelId + "-ugv-log-panel", s.logs);
 }
@@ -1374,6 +1631,23 @@ if (ROLE === "admin") {
       });
     });
     socket.on("error", (data) => alert(data.msg));
+
+    // Key binding table
+    const bindTbody = el("bind-table-body");
+    if (bindTbody) {
+      KeyBindingManager.renderBindingsTable(bindTbody);
+      el("btn-bindings-reset")?.addEventListener("click", () => {
+        KeyBindingManager.resetToDefaults();
+        KeyBindingManager.renderBindingsTable(bindTbody);
+      });
+    }
+    // Rebuild bindings table when modules change (sidebar re-render)
+    const _origRenderSidebar = _renderSidebar;
+    _renderSidebar = function() {
+      _origRenderSidebar();
+      const tb = el("bind-table-body");
+      if (tb) KeyBindingManager.renderBindingsTable(tb);
+    };
   })();
 }
 
@@ -1382,6 +1656,7 @@ if (ROLE === "admin") {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 LayoutManager.init();
+KeyBindingManager.init();
 _checkEmptyState();
 
 // Auto-open panels from last layout (optional — restore last-saved or use a default)

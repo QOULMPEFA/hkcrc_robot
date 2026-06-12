@@ -28,7 +28,9 @@ _FRAME_TIMEOUT = 5.0
 def _detect_cameras() -> List[str]:
     """Return /dev/video paths that are real video capture devices.
 
-    Uses v4l2-ctl to filter out codec-only nodes (e.g. cedrus on Allwinner).
+    Uses v4l2-ctl to filter out codec-only nodes (e.g. cedrus on Allwinner)
+    and metadata-only sub-devices (UVC cameras often expose /dev/video1 for
+    video and /dev/video2 for metadata — we only want the video one).
     """
     import os
     devices = []
@@ -36,20 +38,38 @@ def _detect_cameras() -> List[str]:
         path = f"/dev/video{i}"
         if not os.path.exists(path):
             continue
+        checked_v4l2 = False
         try:
             info = subprocess.run(
                 ["v4l2-ctl", "-d", path, "--info"],
                 capture_output=True, text=True, timeout=3,
             )
-            # cedrus reports "Video Memory-to-Memory" — skip those.
-            if "Video Capture" in info.stdout:
+            checked_v4l2 = True
+            out = info.stdout
+            # Skip codec/M2M devices (cedrus).
+            if "Memory-to-Memory" in out or "Memory to Memory" in out:
+                log.info("[Camera] skip %s — codec/M2M device", path)
+                continue
+            # Must have actual Video Capture in Device Caps (Capabilities
+            # alone is not enough — metadata sub-devices report Video Capture
+            # in Capabilities but not Device Caps).
+            dc_section = out.split("Device Caps", 1)
+            if len(dc_section) > 1 and "Video Capture" in dc_section[1]:
                 devices.append(path)
                 continue
-            # v4l2-ctl succeeded but didn't report "Video Capture" —
-            # some cameras (e.g. Orbbec) return empty/atypical output.
-            # Fall through to sysfs check below.
+            if "Video Capture" in out and "Device Capabilities" not in out:
+                # Older kernels that don't print Device Caps — trust it.
+                devices.append(path)
+                continue
+            # v4l2-ctl succeeded but this isn't a video capture device
+            # (metadata-only sub-device, etc.) — skip, don't fall through.
+            log.info("[Camera] skip %s — no Video Capture in Device Caps", path)
+            continue
         except (FileNotFoundError, subprocess.SubprocessError):
             pass  # v4l2-ctl missing or failed — fall through to sysfs
+
+        if checked_v4l2:
+            continue  # already determined it's not a capture device
 
         # Sysfs fallback: check driver name to filter codec nodes (cedrus).
         try:
@@ -106,7 +126,17 @@ class CameraModule(RobotModule):
         }
 
     def get_socketio_handlers(self) -> Dict[str, callable]:
-        return {}
+        return {"camera_reset": self._handle_camera_reset}
+
+    def _handle_camera_reset(self, data: dict, emit) -> None:
+        """Reset camera: kill ffmpeg, USB reset, restart ffmpeg."""
+        log.info("[Camera] Manual reset requested from GUI")
+        self._restart_count = 0
+        self._reset_usb()
+        # Force-restart ffmpeg on the (possibly new) device.
+        self._choose_active_device()
+        self._start_ffmpeg()
+        emit("camera_reset_result", {"ok": True})
 
     # ── lifecycle ───────────────────────────────────────────────────────
 
@@ -229,12 +259,53 @@ class CameraModule(RobotModule):
         """Move to the next available camera device."""
         self._restart_count = 0
         if len(self._available_devices) <= 1:
-            # Only one device — just restart after a brief cooldown.
-            log.info("[Camera] single device — will retry %s after cooldown", self._device)
+            # Only one device — try USB reset before retrying.
+            log.info("[Camera] single device — USB reset then retry %s", self._device)
+            self._reset_usb()
             return
         self._device_idx = (self._device_idx + 1) % len(self._available_devices)
         self._choose_active_device()
         log.warning("[Camera] cycled to next device: %s", self._device)
+
+    def _reset_usb(self) -> None:
+        """Unbind and rebind the USB device backing the active camera.
+
+        This recovers the camera from UVC control failures (EPIPE on
+        GET_DEF queries) that leave it in a wedged state where the
+        device opens but produces no frames.
+        """
+        import os as _os
+        dev_node = _os.path.basename(self._device)  # e.g. "video1"
+        dev_path = f"/sys/class/video4linux/{dev_node}/device"
+        usb_dev = None
+        try:
+            # Walk up to find the USB device entry (contains 'driver' symlink).
+            parent = _os.path.realpath(dev_path)
+            for _ in range(4):
+                if _os.path.isdir(_os.path.join(parent, "driver")):
+                    usb_dev = _os.path.basename(parent)
+                    driver_link = _os.path.realpath(_os.path.join(parent, "driver"))
+                    driver = _os.path.basename(driver_link)
+                    break
+                parent = _os.path.dirname(parent)
+        except OSError:
+            pass
+        if not usb_dev or not driver:
+            log.warning("[Camera] USB reset: could not find USB device for %s", self._device)
+            return
+        log.info("[Camera] USB reset: unbind %s from %s …", usb_dev, driver)
+        try:
+            with open(f"/sys/bus/usb/drivers/{driver}/unbind", "w") as fh:
+                fh.write(usb_dev)
+            time.sleep(2)
+            with open(f"/sys/bus/usb/drivers/{driver}/bind", "w") as fh:
+                fh.write(usb_dev)
+            time.sleep(1)
+            # Re-detect available devices (device numbering may change).
+            self._available_devices = _detect_cameras()
+            log.info("[Camera] USB reset: bind complete, devices=%s", self._available_devices)
+        except OSError as exc:
+            log.warning("[Camera] USB reset failed: %s", exc)
 
     # ── internals: unified ffmpeg (MJPEG pipe + RTMP push) ──────────────
 
@@ -245,6 +316,11 @@ class CameraModule(RobotModule):
         support concurrent access.
         """
         self._kill_ffmpeg()
+        # Force-release the device from any orphaned processes (e.g. stale
+        # ffmpeg from a previous service run killed by systemd).
+        import os as _os
+        _os.system(f"fuser -k {self._device} 2>/dev/null")
+        time.sleep(0.5)
         cmd = [
             "ffmpeg",
             "-fflags", "nobuffer",
@@ -261,8 +337,21 @@ class CameraModule(RobotModule):
         ]
         try:
             self._ffmpeg_proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 bufsize=0)
+            # Drain stderr in a background thread so the pipe doesn't fill.
+            self._stderr_lines: List[str] = []
+            def _drain_stderr():
+                try:
+                    for line in self._ffmpeg_proc.stderr:
+                        decoded = line.decode("utf-8", errors="replace").rstrip()
+                        self._stderr_lines.append(decoded)
+                        if len(self._stderr_lines) > 200:
+                            self._stderr_lines.pop(0)
+                except Exception:
+                    pass
+            t = threading.Thread(target=_drain_stderr, daemon=True, name="cam-stderr")
+            t.start()
             self._last_frame_time = time.time()
             log.info("[Camera] ffmpeg started (pid=%d) on %s → MJPEG pipe",
                      self._ffmpeg_proc.pid, self._device)
@@ -272,6 +361,12 @@ class CameraModule(RobotModule):
 
     def _kill_ffmpeg(self) -> None:
         if self._ffmpeg_proc:
+            # Dump any accumulated stderr for diagnostics.
+            stderr_lines = getattr(self, "_stderr_lines", []) or []
+            if stderr_lines:
+                log.warning("[Camera] ffmpeg stderr (last 5 lines):\n%s",
+                            "\n".join(stderr_lines[-5:]))
+                self._stderr_lines = []
             try:
                 self._ffmpeg_proc.kill()
                 self._ffmpeg_proc.wait(timeout=3)
@@ -284,20 +379,64 @@ class CameraModule(RobotModule):
             self._ffmpeg_proc = None
 
     def _frame_loop(self) -> None:
-        """Read MJPEG frames from ffmpeg stdout, broadcast, watch for signal loss."""
+        """Read MJPEG frames from ffmpeg stdout, broadcast, watch for signal loss.
+
+        Uses select() with a 1-second timeout so that signal-loss detection
+        can run even when ffmpeg produces no output (the old blocking-read
+        design would hang forever on a silent ffmpeg).
+        """
+        import select as _select
+        import os as _os
         buf = b""
         frame_n = 0
         while self._running:
             proc = self._ffmpeg_proc
-            if proc is None:
+            if proc is None or proc.stdout is None:
                 time.sleep(1)
                 continue
+            fd = proc.stdout.fileno()
+
+            # Wait up to 1 s for data; wake periodically to check health.
             try:
-                chunk = proc.stdout.read(4096)
-            except Exception:
+                ready, _, _ = _select.select([fd], [], [], 1.0)
+            except (ValueError, OSError, AttributeError):
+                time.sleep(1)
+                continue
+
+            if not ready:
+                # No data within 1 s — check that ffmpeg is still alive.
+                if proc.poll() is not None:
+                    if self._running:
+                        self._restart_count += 1
+                        log.warning("[Camera] ffmpeg exited (restart #%d)", self._restart_count)
+                        if self._restart_count >= _MAX_RESTARTS:
+                            self._cycle_device()
+                        time.sleep(1)
+                        self._start_ffmpeg()
+                        buf = b""
+                        frame_n = 0
+                    continue
+                # Alive but silent — watch for signal loss.
+                if self._last_frame_time > 0:
+                    elapsed = time.time() - self._last_frame_time
+                    if elapsed > _FRAME_TIMEOUT:
+                        log.warning("[Camera] signal lost — %.1fs since last frame, restarting", elapsed)
+                        self._restart_count += 1
+                        if self._restart_count >= _MAX_RESTARTS:
+                            self._cycle_device()
+                        self._start_ffmpeg()
+                        buf = b""
+                        frame_n = 0
+                continue
+
+            # Data waiting — read it.
+            try:
+                chunk = _os.read(fd, 65536)
+            except (OSError, ValueError):
                 chunk = None
 
             if not chunk:
+                # EOF — ffmpeg pipe closed.
                 if self._running:
                     self._restart_count += 1
                     log.warning("[Camera] ffmpeg exited (restart #%d)", self._restart_count)
@@ -306,6 +445,7 @@ class CameraModule(RobotModule):
                     time.sleep(1)
                     self._start_ffmpeg()
                     buf = b""
+                    frame_n = 0
                 continue
 
             buf += chunk
@@ -327,17 +467,6 @@ class CameraModule(RobotModule):
                 if frame_n % 150 == 1:
                     log.info("[Camera] frame #%d (%d bytes), %d client(s)",
                              frame_n, len(frame), self.client_count())
-
-            # Signal-loss detection
-            elapsed = time.time() - self._last_frame_time
-            if elapsed > _FRAME_TIMEOUT and self._last_frame_time > 0:
-                log.warning("[Camera] signal lost — %.1fs since last frame, restarting", elapsed)
-                self._restart_count += 1
-                if self._restart_count >= _MAX_RESTARTS:
-                    self._cycle_device()
-                self._start_ffmpeg()
-                buf = b""
-                frame_n = 0
 
     # ── helpers ─────────────────────────────────────────────────────────
 

@@ -171,10 +171,19 @@ I18n.en["module.motor"]  = "Motor Control";
 I18n.zh["camera.offline"]  = "摄像头未连接";
 I18n.zh["camera.loading"]  = "加载中...";
 I18n.zh["camera.status"]   = "MJPEG";
+I18n.zh["camera.reset"]    = "重置摄像头";
+I18n.zh["camera.resetting"] = "正在重置...";
+I18n.zh["camera.reset_ok"]  = "摄像头已重置";
+I18n.zh["camera.status_lost"] = "信号丢失";
+I18n.zh["camera.status_stale"] = "信号延迟";
+I18n.zh["camera.status_waiting"] = "等待画面...";
 
 I18n.en["camera.offline"]  = "Camera Offline";
 I18n.en["camera.loading"]  = "Loading...";
 I18n.en["camera.status"]   = "MJPEG";
+I18n.en["camera.reset"]    = "Reset Camera";
+I18n.en["camera.resetting"] = "Resetting...";
+I18n.en["camera.reset_ok"]  = "Camera Reset OK";
 
 /* === UGV panel === */
 I18n.zh["ugv.connection"]    = "连接：";
@@ -432,6 +441,29 @@ I18n.en["settings.confirm_delete"]   = "Confirm delete user?";
 I18n.en["settings.role_viewer"]      = "Viewer";
 I18n.en["settings.role_operator"]    = "Operator";
 I18n.en["settings.role_admin"]       = "Admin";
+
+/* === settings — key bindings === */
+I18n.zh["settings.key_bindings_section"] = "按键绑定";
+I18n.zh["settings.th_action"]   = "操作";
+I18n.zh["settings.th_module"]   = "模块";
+I18n.zh["settings.th_key"]      = "按键";
+I18n.zh["settings.th_bind"]     = "绑定";
+I18n.zh["settings.bind_key"]    = "绑定";
+I18n.zh["settings.press_key"]   = "按下按键...";
+I18n.zh["settings.clear_binding"] = "清除绑定";
+I18n.zh["settings.reset_bindings"] = "重置为默认";
+I18n.zh["settings.binding_conflict"] = "该按键已绑定到 {0}，将被覆盖。";
+
+I18n.en["settings.key_bindings_section"] = "Key Bindings";
+I18n.en["settings.th_action"]   = "Action";
+I18n.en["settings.th_module"]   = "Module";
+I18n.en["settings.th_key"]      = "Key";
+I18n.en["settings.th_bind"]     = "Bind";
+I18n.en["settings.bind_key"]    = "Bind";
+I18n.en["settings.press_key"]   = "Press a key...";
+I18n.en["settings.clear_binding"] = "Clear";
+I18n.en["settings.reset_bindings"] = "Reset to Defaults";
+I18n.en["settings.binding_conflict"] = "Key already bound to {0}, will be overwritten.";
 
 /* === power confirmation === */
 I18n.zh["power.confirm_title"]   = "确认操作";

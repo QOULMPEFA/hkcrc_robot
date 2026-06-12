@@ -20,9 +20,9 @@
       <button id="btn-layout-delete" class="btn-secondary btn-sm" data-i18n-title="header.delete_layout" title="删除当前布局"><span data-i18n="header.delete">删除</span></button>
     </div>
 
-    <button id="btn-estop" class="btn-estop">EMERGENCY STOP</button>
-    <button id="btn-reboot" class="btn-power btn-reboot" data-i18n-title="header.reboot" title="重启系统">&#x21bb; <span data-i18n="header.reboot">重启</span></button>
-    <button id="btn-shutdown" class="btn-power btn-shutdown" data-i18n-title="header.shutdown" title="关闭系统">&#x23fb; <span data-i18n="header.shutdown">关机</span></button>
+    <button id="btn-estop" class="btn-estop" data-bind-action="global.estop">EMERGENCY STOP</button>
+    <button id="btn-reboot" class="btn-power btn-reboot" data-i18n-title="header.reboot" title="重启系统" data-bind-action="global.reboot">&#x21bb; <span data-i18n="header.reboot">重启</span></button>
+    <button id="btn-shutdown" class="btn-power btn-shutdown" data-i18n-title="header.shutdown" title="关闭系统" data-bind-action="global.shutdown">&#x23fb; <span data-i18n="header.shutdown">关机</span></button>
 
     <div class="header-user">
       <span class="badge role-badge role-{{ role }}">{{ role }}</span>
@@ -115,6 +115,24 @@
             <tr><th data-i18n="settings.th_username">用户名</th><th data-i18n="settings.th_role">角色</th><th data-i18n="settings.th_status">状态</th><th data-i18n="settings.th_actions">操作</th></tr>
           </thead>
           <tbody id="user-table-body"></tbody>
+        </table>
+      </section>
+      <!-- Key Bindings -->
+      <section class="modal-section">
+        <h3 data-i18n="settings.key_bindings_section">Key Bindings</h3>
+        <div style="margin-bottom: 10px">
+          <button id="btn-bindings-reset" class="btn-secondary btn-sm" data-i18n="settings.reset_bindings">Reset to Defaults</button>
+        </div>
+        <table class="bind-table" id="bind-table">
+          <thead>
+            <tr>
+              <th data-i18n="settings.th_action">Action</th>
+              <th data-i18n="settings.th_module">Module</th>
+              <th data-i18n="settings.th_key">Key</th>
+              <th data-i18n="settings.th_bind">Bind</th>
+            </tr>
+          </thead>
+          <tbody id="bind-table-body"></tbody>
         </table>
       </section>
     </div>
