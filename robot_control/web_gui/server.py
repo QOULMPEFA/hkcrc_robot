@@ -400,9 +400,9 @@ def on_system_power(data):
     emit("system_power_result", {"action": action, "ok": True})
     import subprocess
     if action == "reboot":
-        subprocess.Popen("echo orangepi | sudo -S systemctl reboot", shell=True)
+        subprocess.Popen("echo 1114 | sudo -S systemctl reboot", shell=True)
     else:
-        subprocess.Popen("echo orangepi | sudo -S systemctl poweroff", shell=True)
+        subprocess.Popen("echo 1114 | sudo -S systemctl poweroff", shell=True)
 
 
 # ── state broadcast loop ──────────────────────────────────────────────────────

@@ -185,7 +185,15 @@ int main(int argc, char *argv[]) {
     std::cerr << "[bridge] CAN init failed: " << e.what() << std::endl;
     return 1;
   }
-  std::cout << "[bridge] CAN connected (manual enable required)" << std::endl;
+
+  // Enable CAN command mode and start heartbeat immediately.
+  // Ranger Mini V3 requires:
+  //   1. EnableCommandedMode() to set CONTROL_MODE_CAN
+  //   2. Periodic light command with enable_cmd_ctrl=true (clears HL_COMM error 0x0200)
+  //   3. Periodic motion commands at >=50 Hz per SDK
+  robot->EnableCommandedMode();
+  robot->SetLightCommand(CONST_OFF, 0, CONST_OFF, 0);
+  std::cout << "[bridge] CAN connected, command mode enabled" << std::endl;
 
   // ── init TCP server ───────────────────────────────────────────────────────
   int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -214,9 +222,44 @@ int main(int argc, char *argv[]) {
   // ── main loop ─────────────────────────────────────────────────────────────
   int client_fd = -1;
   char rx_buf[1024];
+  std::string rx_line_buf;  // line-oriented receive buffer
+  double last_linear = 0.0, last_angular = 0.0;
+  bool motion_mode_spinning = false;
+  bool pending_estop = false;
+
+  auto process_command = [&](const std::string &cmd_json) {
+    std::string cmd = extract_str(cmd_json, "cmd");
+    if (cmd.empty()) return;
+    if (cmd == "velocity") {
+      double linear  = extract_num(cmd_json, "linear", 0.0);
+      double angular = extract_num(cmd_json, "angular", 0.0);
+      last_linear  = linear;
+      last_angular = angular;
+      motion_mode_spinning = (linear < 0.01 && linear > -0.01
+                            && (angular > 0.01 || angular < -0.01));
+    } else if (cmd == "estop") {
+      last_linear = 0.0;
+      last_angular = 0.0;
+      motion_mode_spinning = false;
+      pending_estop = true;
+      std::cout << "[bridge] ESTOP" << std::endl;
+    } else if (cmd == "enable") {
+      last_linear = 0.0;
+      last_angular = 0.0;
+      motion_mode_spinning = false;
+      robot->ResetRobotState();
+      robot->EnableCommandedMode();
+      std::cout << "[bridge] Faults cleared, command mode enabled" << std::endl;
+    } else if (cmd == "reset") {
+      robot->ResetRobotState();
+      std::cout << "[bridge] Robot state reset" << std::endl;
+    } else {
+      std::cerr << "[bridge] Unknown cmd: " << cmd << std::endl;
+    }
+  };
 
   while (g_running) {
-    struct timeval tv = {0, 100000};  // 100 ms
+    struct timeval tv = {0, 20000};  // 20 ms (50 Hz select for motion heartbeat)
     fd_set fds;
     FD_ZERO(&fds);
     FD_SET(listen_fd, &fds);
@@ -242,54 +285,78 @@ int main(int argc, char *argv[]) {
           close(client_fd);
         }
         client_fd = new_fd;
+        rx_line_buf.clear();
         std::cout << "[bridge] Client connected (fd=" << client_fd << ")" << std::endl;
       }
     }
 
-    // client data
+    // client data — line-oriented framing
     if (client_fd >= 0 && FD_ISSET(client_fd, &fds)) {
       ssize_t n = recv(client_fd, rx_buf, sizeof(rx_buf) - 1, 0);
       if (n <= 0) {
         std::cout << "[bridge] Client disconnected" << std::endl;
         close(client_fd);
         client_fd = -1;
+        rx_line_buf.clear();
+        last_linear = 0.0;
+        last_angular = 0.0;
+        motion_mode_spinning = false;
       } else {
         rx_buf[n] = '\0';
-        std::string cmd_json(rx_buf);
-        std::string cmd = extract_str(cmd_json, "cmd");
-
-        if (cmd == "velocity") {
-          double linear  = extract_num(cmd_json, "linear", 0.0);
-          double angular = extract_num(cmd_json, "angular", 0.0);
-          if (linear < 0.01 && linear > -0.01 && (angular > 0.01 || angular < -0.01)) {
-            robot->SetMotionMode(RangerInterface::MotionMode::kSpinning);
-            robot->SetMotionCommand(0.0, 0.0, angular);
-          } else {
-            robot->SetMotionMode(RangerInterface::MotionMode::kDualAckerman);
-            robot->SetMotionCommand(linear, angular);
-          }
-        } else if (cmd == "estop") {
-          robot->SetMotionCommand(0.0, 0.0);
-          std::cout << "[bridge] ESTOP" << std::endl;
-        } else if (cmd == "enable") {
-          robot->ResetRobotState();
-          robot->EnableCommandedMode();
-          std::cout << "[bridge] Fault cleared, commanded mode re-enabled" << std::endl;
-        } else if (cmd == "reset") {
-          robot->ResetRobotState();
-          std::cout << "[bridge] Robot state reset" << std::endl;
-        } else {
-          std::cerr << "[bridge] Unknown cmd: " << cmd << std::endl;
+        rx_line_buf += rx_buf;
+        // Process all complete lines
+        size_t pos;
+        while ((pos = rx_line_buf.find('\n')) != std::string::npos) {
+          std::string line = rx_line_buf.substr(0, pos);
+          rx_line_buf.erase(0, pos + 1);
+          if (!line.empty() && line.back() == '\r') line.pop_back();
+          if (!line.empty()) process_command(line);
         }
+        // Safety: if buffer grows too large without a newline, reset it
+        if (rx_line_buf.size() > 4096) rx_line_buf.clear();
       }
     }
 
-    // send state (regardless of client, to keep state fresh)
-    static auto last_send = std::chrono::steady_clock::now();
+    // ── motion command heartbeat (50 Hz) ────────────────────────────────
+    static auto last_motion = std::chrono::steady_clock::now();
+    static bool last_mode_spinning = false;
     auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - last_send).count();
 
-    if (elapsed >= STATE_INTERVAL_US) {
+    // Handle pending estop — zero velocity immediately
+    if (pending_estop) {
+      robot->SetMotionCommand(0.0, 0.0);
+      pending_estop = false;
+    }
+    // Only call SetMotionMode when the mode actually changes, to reduce
+    // SDK mutex contention (avoids Resource deadlock avoided crash).
+    if (motion_mode_spinning != last_mode_spinning) {
+      robot->SetMotionMode(motion_mode_spinning
+          ? RangerInterface::MotionMode::kSpinning
+          : RangerInterface::MotionMode::kDualAckerman);
+      last_mode_spinning = motion_mode_spinning;
+    }
+    if (motion_mode_spinning) {
+      robot->SetMotionCommand(0.0, 0.0, last_angular);
+    } else {
+      robot->SetMotionCommand(last_linear, last_angular);
+    }
+    last_motion = now;
+
+    // ── light command heartbeat (2 Hz) ──────────────────────────────────
+    // The light command carries enable_cmd_ctrl=true which satisfies the
+    // motor controller's HL_COMM watchdog.  Must be sent periodically.
+    static auto last_light = std::chrono::steady_clock::now();
+    auto light_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - last_light).count();
+    if (light_elapsed >= 500000) {  // every 500 ms
+      robot->SetLightCommand(CONST_OFF, 0, CONST_OFF, 0);
+      last_light = now;
+    }
+
+    // ── state broadcast (20 Hz) ────────────────────────────────────────
+    static auto last_send = std::chrono::steady_clock::now();
+    auto send_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - last_send).count();
+
+    if (send_elapsed >= STATE_INTERVAL_US) {
       last_send = now;
 
       RangerCoreState          core   = robot->GetRobotState();
@@ -305,6 +372,9 @@ int main(int argc, char *argv[]) {
           std::cout << "[bridge] Send error, closing client" << std::endl;
           close(client_fd);
           client_fd = -1;
+          last_linear = 0.0;
+          last_angular = 0.0;
+          motion_mode_spinning = false;
         }
       }
     }
