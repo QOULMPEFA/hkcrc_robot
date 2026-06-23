@@ -312,21 +312,27 @@ def on_disconnect():
 
 # ── SocketIO events — admin / settings ────────────────────────────────────────
 
+def _get_sudo_password() -> str:
+    """Return the configured sudo password (with trailing newline for stdin)."""
+    pw = auth.get_setting("sudo_password", "orangepi")
+    return pw + "\n" if pw else "orangepi\n"
+
+
 @socketio.on("restart_can")
 def on_restart_can(_data=None):
     _touch_activity()
     if not _require_role("admin"): return
     try:
-        sudo_password = "1114\n"
+        sp = _get_sudo_password()
         subprocess.run(
             ["sudo", "-S", "ip", "link", "set", "can0", "down"],
-            input=sudo_password, text=True, capture_output=True, timeout=10)
+            input=sp, text=True, capture_output=True, timeout=10)
         subprocess.run(
             ["sudo", "-S", "ip", "link", "set", "can0", "up", "type", "can", "bitrate", "500000"],
-            input=sudo_password, text=True, capture_output=True, timeout=10)
+            input=sp, text=True, capture_output=True, timeout=10)
         subprocess.run(
             ["sudo", "-S", "systemctl", "restart", "ugv_bridge.service"],
-            input=sudo_password, text=True, capture_output=True, timeout=10)
+            input=sp, text=True, capture_output=True, timeout=10)
         emit("restart_can_result", {"ok": True, "msg": i18n.t("can_restarted", _lang())})
         log.info("[CAN] Interface restarted via Web GUI")
     except Exception as e:
@@ -337,7 +343,7 @@ def on_restart_can(_data=None):
 @socketio.on("settings_get")
 def on_settings_get(_data=None):
     """Return all stored settings."""
-    keys = ("camera_timeout_min",)
+    keys = ("camera_timeout_min", "sudo_password")
     result = {}
     for key in keys:
         result[key] = auth.get_setting(key, "")
@@ -350,7 +356,7 @@ def on_settings_set(data):
     if not _require_role("admin"): return
     key   = data.get("key", "")
     value = str(data.get("value", ""))
-    if key in ("camera_timeout_min",):
+    if key in ("camera_timeout_min", "sudo_password"):
         auth.set_setting(key, value)
         emit("settings_ack", {"key": key, "value": value})
 
@@ -400,9 +406,9 @@ def on_system_power(data):
     emit("system_power_result", {"action": action, "ok": True})
     import subprocess
     if action == "reboot":
-        subprocess.Popen("echo 1114 | sudo -S systemctl reboot", shell=True)
+        subprocess.Popen(f"echo {_get_sudo_password().strip()} | sudo -S systemctl reboot", shell=True)
     else:
-        subprocess.Popen("echo 1114 | sudo -S systemctl poweroff", shell=True)
+        subprocess.Popen(f"echo {_get_sudo_password().strip()} | sudo -S systemctl poweroff", shell=True)
 
 
 # ── state broadcast loop ──────────────────────────────────────────────────────
@@ -449,7 +455,7 @@ def main():
         "arm":    {"host": "192.168.56.101"},
         "ugv":    {"host": "127.0.0.1", "port": 9100},
         "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
-        "camera": {"devices": ["/dev/video6", "/dev/video4"]},
+        "camera": {"devices": ["/dev/video1"]},
         "motor":  {},
         "hand":   {"protocol": "can", "can_iface": "can0", "master_id": 1, "slave_id": 0x02},
     }

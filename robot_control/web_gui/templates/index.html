@@ -107,6 +107,20 @@
         </div>
       </section>
 
+      <!-- Sudo password -->
+      <section class="modal-section">
+        <h3 data-i18n="settings.sudo_section">Sudo 密码</h3>
+        <p class="settings-info" data-i18n="settings.sudo_desc">用于 USB 重置、CAN 重启、关机等系统操作。不同机器人的 sudo 密码可能不同。</p>
+        <div class="input-row">
+          <label><span data-i18n="settings.sudo_password_label">Sudo 密码</span>
+            <input type="password" id="sudo-password" autocomplete="off" />
+          </label>
+        </div>
+        <div class="btn-row">
+          <button class="btn-primary" id="btn-save-sudo-password" data-i18n="settings.save_sudo">保存</button>
+        </div>
+      </section>
+
       <!-- User management -->
       <section class="modal-section">
         <h3 data-i18n="settings.user_management">用户管理</h3>

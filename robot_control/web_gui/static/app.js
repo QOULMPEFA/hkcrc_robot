@@ -462,15 +462,28 @@ const KeyBindingManager = {
   _onBoundCb: null,
 
   _defaults: {
-    "w":          "motor.forward",
-    "a":          "motor.left",
-    "s":          "motor.backward",
-    "d":          "motor.right",
-    " ":          "motor.stop",
+    // UGV — primary locomotion (matches panel WASD hint)
+    "w":          "ugv.forward",
+    "a":          "ugv.left",
+    "s":          "ugv.backward",
+    "d":          "ugv.right",
+    " ":          "ugv.stop",
+    "r":          "ugv.enable",
+    // Motor — secondary (arrow keys)
     "arrowup":    "motor.forward",
     "arrowdown":  "motor.backward",
     "arrowleft":  "motor.left",
     "arrowright": "motor.right",
+    // Lift
+    "t":          "lift.move",
+    "y":          "lift.stop",
+    "u":          "lift.home",
+    "i":          "lift.reset",
+    // Hand
+    "1":          "hand.open",
+    "2":          "hand.close",
+    "3":          "hand.pinch",
+    "4":          "hand.send",
   },
 
   _actions: {
@@ -668,8 +681,9 @@ const KeyBindingManager = {
     if (e.repeat) return;
     // Skip when a modal overlay is visible (power confirm / settings)
     if (el("power-overlay")?.style.display === "flex") return;
+    if (el("settings-overlay")?.style.display === "flex") return;
     const tag = document.activeElement?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON") return;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
     const key = this._canonicalKey(e);
 
@@ -1697,15 +1711,25 @@ if (ROLE === "admin") {
       if (isNaN(val) || val < 1) { alert(I18n.t("misc.enter_valid_min")); return; }
       socket.emit("settings_set", { key: "camera_timeout_min", value: val });
     });
+    el("btn-save-sudo-password")?.addEventListener("click", () => {
+      const val = el("sudo-password")?.value || "";
+      socket.emit("settings_set", { key: "sudo_password", value: val });
+    });
 
     socket.on("settings_data", (data) => {
       if (data.camera_timeout_min) {
         const inp = el("camera-timeout"); if (inp) inp.value = data.camera_timeout_min;
       }
+      if (data.sudo_password !== undefined) {
+        const inp = el("sudo-password"); if (inp) inp.value = data.sudo_password;
+      }
     });
     socket.on("settings_ack", (data) => {
       if (data.key === "camera_timeout_min") {
         const inp = el("camera-timeout"); if (inp) inp.value = data.value;
+      }
+      if (data.key === "sudo_password") {
+        const inp = el("sudo-password"); if (inp) inp.value = data.value;
       }
     });
 
