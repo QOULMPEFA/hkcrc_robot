@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title data-i18n="auth.title_login">登录 — Robot Control Panel</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="auth-page">
+  <div class="auth-card">
+    <h1>Robot Control Panel</h1>
+    <h2 data-i18n="auth.title_login">登录</h2>
+
+    {% if msg == 'pending' %}
+    <div class="auth-alert warn" data-i18n="auth.pending_msg">账号正在等待管理员审批，请稍后再试。</div>
+    {% endif %}
+    {% if msg == 'relogin' %}
+    <div class="auth-alert warn" data-i18n="auth.relogin_msg">您的账号已在其他设备登录，当前会话已失效。</div>
+    {% endif %}
+    {% if error %}
+    <div class="auth-alert error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/login">
+      <label><span data-i18n="auth.username">用户名</span>
+        <input type="text" name="username" autocomplete="username" required autofocus />
+      </label>
+      <label><span data-i18n="auth.password">密码</span>
+        <input type="password" name="password" autocomplete="current-password" required />
+      </label>
+      <button type="submit" class="btn-primary btn-full" data-i18n="auth.login_btn">登录</button>
+    </form>
+
+    <p class="auth-footer"><span data-i18n="auth.no_account">没有账号？</span><a href="/register" data-i18n="auth.register_link">注册</a></p>
+  </div>
+
+  <script src="/static/i18n.js"></script>
+  <script>I18n.init();</script>
+</body>
+</html>

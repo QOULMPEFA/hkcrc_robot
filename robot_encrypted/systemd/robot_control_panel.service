@@ -1,0 +1,16 @@
+[Unit]
+Description=Robot Control Panel (Encrypted)
+After=network.target
+
+[Service]
+Type=simple
+User=orangepi
+WorkingDirectory=/home/orangepi/robot_encrypted
+ExecStart=/usr/bin/python3 /home/orangepi/robot_encrypted/run_server.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/robot_control_panel.log
+StandardError=append:/var/log/robot_control_panel.log
+
+[Install]
+WantedBy=multi-user.target

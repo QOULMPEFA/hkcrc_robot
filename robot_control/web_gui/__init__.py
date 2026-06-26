@@ -1,0 +1,1 @@
+"""web_gui package — Flask + SocketIO web control panel."""

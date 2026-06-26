@@ -1,0 +1,14 @@
+[Unit]
+Description=PipeRobot WiFi Hotspot
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/create_ap -n --no-virt --isolate-clients -w 2 --freq-band 2.4 wlan0 PipeRobot pipemaker
+ExecStop=/usr/bin/create_ap --stop wlan0
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

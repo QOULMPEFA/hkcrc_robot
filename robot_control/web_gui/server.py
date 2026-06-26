@@ -21,10 +21,7 @@ from flask_socketio import SocketIO, emit
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from robot_control.robot import Robot
 
-# auth module lives alongside this file
-sys.path.insert(0, os.path.dirname(__file__))
-import auth
-import i18n
+from robot_control.web_gui import auth, i18n
 
 log = logging.getLogger(__name__)
 

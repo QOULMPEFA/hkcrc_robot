@@ -21,7 +21,7 @@ from functools import wraps
 from flask import session, redirect, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
 
-import i18n
+from robot_control.web_gui import i18n
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
 
