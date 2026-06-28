@@ -478,6 +478,45 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   text-align: right;
 }
 
+/* ── servo joint ───────────────────────────────────────────────────────────── */
+.joint-section {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent2);
+  margin-bottom: 8px;
+}
+.servo-ids {
+  font-weight: normal;
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 6px;
+}
+.servo-joint-row {
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 2px 0;
+}
+.servo-monitor {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.servo-monitor b {
+  color: var(--text);
+  margin-left: 4px;
+}
+
 /* ── collision warning banner ─────────────────────────────────────────────── */
 .collision-warn {
   background: #3d1a1a;

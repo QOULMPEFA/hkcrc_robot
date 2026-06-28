@@ -449,12 +449,11 @@ def main():
     # Each module degrades to stub mode when SDK or hardware is absent.
     # To hide a module from the GUI, remove it or set "enabled": false.
     config = {
-        "arm":    {"host": "192.168.56.101"},
-        "ugv":    {"host": "127.0.0.1", "port": 9100},
-        "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
         "camera": {"devices": ["/dev/video1"]},
         "motor":  {},
-        "hand":   {"protocol": "can", "can_iface": "can0", "master_id": 1, "slave_id": 0x02},
+        "joint":  {},
+        "drive":  {},
+        "demo":   {},
     }
     #
     # ── Pipe robot minimal ──────────────────────────────────────────────
@@ -462,6 +461,11 @@ def main():
 
     robot = Robot(config)
     robot.start()
+
+    # Wire demo module to joint + drive for direct hardware control
+    demo = robot.modules.get("demo")
+    if demo:
+        demo.set_modules(robot.modules.get("joint"), robot.modules.get("drive"))
 
     # Register dynamic SocketIO handlers from loaded modules
     _register_module_handlers(robot)

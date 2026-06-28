@@ -31,6 +31,10 @@ _MODULE_REGISTRY: Dict[str, tuple] = {
     "hand":   ("robot_control.hand",   "HandController"),
     "camera": ("robot_control.camera", "CameraModule"),
     "motor":  ("robot_control.motor",  "MotorController"),
+    "servo":  ("robot_control.servo",  "ServoModule"),
+    "joint":  ("robot_control.pipi_joint",  "JointModule"),
+    "drive":  ("robot_control.pipi_drive",  "DriveModule"),
+    "demo":   ("robot_control.demo",        "DemoModule"),
 }
 
 
