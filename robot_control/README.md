@@ -243,7 +243,7 @@ python robot_control/web_gui/server.py
 
 | 方式 | 地址 |
 |------|------|
-| 外网（frp） | http://frp-fit.com:35230 |
+| 外网（frp） | http://frp-fit.com:35000 |
 | 局域网 | http://192.168.20.48:6080 |
 | 本机（AnyDesk） | http://127.0.0.1:6080 |
 

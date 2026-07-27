@@ -15,7 +15,24 @@ _project_root = os.path.dirname(os.path.abspath(__file__))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from robot_control.web_gui.server import main
+# Import server module so we can inject dev_mode handlers before run
+from robot_control.web_gui import server as _server
+
+# Wire in developer mode (hotspot ↔ WiFi switching)
+try:
+    import dev_mode
+    dev_mode.register_handlers(_server.socketio)
+    # Start hotspot on boot (always, unless dev_mode was on before reboot)
+    import threading
+    def _boot_hotspot():
+        import time
+        time.sleep(2)  # let server start first
+        if not dev_mode._is_wifi_connected() and not dev_mode._is_hotspot_running():
+            dev_mode.start_hotspot()
+    threading.Thread(target=_boot_hotspot, daemon=True).start()
+except Exception as _e:
+    import logging
+    logging.warning("[Bootstrap] dev_mode init skipped: %s", _e)
 
 if __name__ == "__main__":
-    main()
+    _server.main()

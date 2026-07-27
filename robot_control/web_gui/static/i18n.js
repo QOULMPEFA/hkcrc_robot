@@ -97,6 +97,10 @@ const I18n = {
  * ─────────────────────────────────────────────────────────────────────── */
 
 /* === header / chrome === */
+I18n.zh["header.page_title"]        = "机器人控制面板 | Robot Control Panel";
+I18n.zh["header.panel_title"]       = "机器人控制面板";
+I18n.zh["header.robot_type_tag"]    = "机器人";
+I18n.zh["header.hardware_summary"]  = "";
 I18n.zh["header.connected"]    = "已连接";
 I18n.zh["header.disconnected"] = "未连接";
 I18n.zh["header.select_layout"] = "— 选择布局 —";
@@ -118,6 +122,10 @@ I18n.zh["header.role_viewer"]   = "观察员";
 I18n.zh["header.role_operator"] = "操作员";
 I18n.zh["header.role_admin"]    = "管理员";
 
+I18n.en["header.page_title"]        = "Robot Control Panel | 机器人控制面板";
+I18n.en["header.panel_title"]       = "Robot Control Panel";
+I18n.en["header.robot_type_tag"]    = "Robot";
+I18n.en["header.hardware_summary"]  = "";
 I18n.en["header.connected"]    = "Connected";
 I18n.en["header.disconnected"] = "Disconnected";
 I18n.en["header.select_layout"] = "— Select Layout —";
@@ -166,6 +174,7 @@ I18n.zh["module.gimbal"] = "云台控制";
 I18n.zh["module.joint"]  = "关节控制";
 I18n.zh["module.drive"]  = "驱动电机";
 I18n.zh["module.demo"]   = "演示序列";
+I18n.zh["module.teleop"] = "XR 遥操作";
 
 I18n.en["module.camera"] = "Camera";
 I18n.en["module.ugv"]    = "UGV Chassis";
@@ -178,6 +187,46 @@ I18n.en["module.gimbal"] = "Gimbal";
 I18n.en["module.joint"]  = "Joint";
 I18n.en["module.drive"]  = "Drive Motor";
 I18n.en["module.demo"]   = "Demo Sequence";
+I18n.en["module.teleop"] = "XR Teleop";
+
+/* === teleop panel === */
+I18n.zh["teleop.xr_status"]    = "XR:";
+I18n.zh["teleop.active"]       = "遥操作:";
+I18n.zh["teleop.tracking"]     = "跟踪中:";
+I18n.zh["teleop.calibrated"]   = "已标定:";
+I18n.zh["teleop.position"]     = "位置";
+I18n.zh["teleop.trigger"]      = "扳机:";
+I18n.zh["teleop.enable"]       = "启用遥操作";
+I18n.zh["teleop.disable"]      = "禁用遥操作";
+I18n.zh["teleop.calibrate"]    = "标定参考位";
+I18n.zh["teleop.toggle_log"]   = "数据记录";
+I18n.zh["teleop.active_yes"]   = "已启用";
+I18n.zh["teleop.active_no"]    = "未启用";
+I18n.zh["teleop.tracking_yes"] = "跟踪中";
+I18n.zh["teleop.tracking_no"]  = "待机";
+I18n.zh["teleop.calib_yes"]    = "已标定";
+I18n.zh["teleop.calib_no"]     = "未标定";
+I18n.zh["teleop.target"]       = "目 ";
+I18n.zh["teleop.actual"]       = "实 ";
+
+I18n.en["teleop.xr_status"]    = "XR:";
+I18n.en["teleop.active"]       = "Teleop:";
+I18n.en["teleop.tracking"]     = "Tracking:";
+I18n.en["teleop.calibrated"]   = "Calibrated:";
+I18n.en["teleop.position"]     = "Position";
+I18n.en["teleop.trigger"]      = "Trigger:";
+I18n.en["teleop.enable"]       = "Enable Teleop";
+I18n.en["teleop.disable"]      = "Disable Teleop";
+I18n.en["teleop.calibrate"]    = "Calibrate Ref";
+I18n.en["teleop.toggle_log"]   = "Data Log";
+I18n.en["teleop.active_yes"]   = "Active";
+I18n.en["teleop.active_no"]    = "Inactive";
+I18n.en["teleop.tracking_yes"] = "Tracking";
+I18n.en["teleop.tracking_no"]  = "Standby";
+I18n.en["teleop.calib_yes"]    = "Yes";
+I18n.en["teleop.calib_no"]     = "No";
+I18n.en["teleop.target"]       = "Tgt ";
+I18n.en["teleop.actual"]       = "Act ";
 
 /* === camera panel === */
 I18n.zh["camera.offline"]  = "摄像头未连接";
@@ -357,10 +406,11 @@ I18n.zh["hand.send"]         = "发送";
 I18n.zh["hand.enabled"]      = "已使能";
 I18n.zh["hand.disabled"]     = "未使能";
 I18n.zh["hand.finger.0"]     = "拇指";
-I18n.zh["hand.finger.1"]     = "食指";
-I18n.zh["hand.finger.2"]     = "中指";
-I18n.zh["hand.finger.3"]     = "无名指";
-I18n.zh["hand.finger.4"]     = "小指";
+I18n.zh["hand.finger.1"]     = "拇指第二关节";
+I18n.zh["hand.finger.2"]     = "食指";
+I18n.zh["hand.finger.3"]     = "中指";
+I18n.zh["hand.finger.4"]     = "无名指";
+I18n.zh["hand.finger.5"]     = "小指";
 
 I18n.en["hand.status"]       = "Status:";
 I18n.en["hand.force"]        = "Grip Force:";
@@ -371,10 +421,11 @@ I18n.en["hand.send"]         = "Send";
 I18n.en["hand.enabled"]      = "Enabled";
 I18n.en["hand.disabled"]     = "Disabled";
 I18n.en["hand.finger.0"]     = "Thumb";
-I18n.en["hand.finger.1"]     = "Index";
-I18n.en["hand.finger.2"]     = "Middle";
-I18n.en["hand.finger.3"]     = "Ring";
-I18n.en["hand.finger.4"]     = "Pinky";
+I18n.en["hand.finger.1"]     = "Thumb J2";
+I18n.en["hand.finger.2"]     = "Index";
+I18n.en["hand.finger.3"]     = "Middle";
+I18n.en["hand.finger.4"]     = "Ring";
+I18n.en["hand.finger.5"]     = "Pinky";
 
 /* === motor panel === */
 I18n.zh["motor.connected"]   = "已连接";

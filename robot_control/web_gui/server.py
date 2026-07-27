@@ -91,9 +91,28 @@ def _gen_device_stream(device_name, cid):
         raise
 
 
+def _validate_stream_token(token: str) -> bool:
+    """Check if the given token matches an active session in the DB."""
+    if not token:
+        return False
+    import sqlite3
+    try:
+        conn = sqlite3.connect(auth.DB_PATH)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE session_token = ?", (token,)
+        ).fetchone()
+        conn.close()
+        return row[0] > 0 if row else False
+    except Exception:
+        return False
+
+
 @app.route("/stream/<device_name>")
-@auth.login_required
 def camera_device_stream(device_name):
+    # Auth via URL token (img tag can't send cookies reliably)
+    token = request.args.get("token", "")
+    if not _validate_stream_token(token):
+        return Response("Unauthorized", status=401)
     cam = _camera_module()
     if not cam:
         return Response("Camera module not loaded", status=503)
@@ -114,7 +133,6 @@ def camera_device_stream(device_name):
 
 
 @app.route("/stream")
-@auth.login_required
 def camera_stream():
     """Legacy endpoint — delegates to the first active device stream."""
     cam = _camera_module()
@@ -179,8 +197,14 @@ def _camera_watchdog():
 @app.route("/")
 @auth.login_required
 def index():
+    import json as _json
     user = auth.get_current_user()
-    return render_template("index.html", current_user=dict(user), role=user["role"])
+    token = session.get("session_token", "")
+    cam = _camera_module()
+    cam_devices = cam.get_device_list() if cam else []
+    return render_template("index.html", current_user=dict(user), role=user["role"],
+                           stream_token=token,
+                           camera_devices=_json.dumps(cam_devices))
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -262,8 +286,10 @@ def _register_module_handlers(robot: Robot):
                 return listener
 
             wrapped = make_listener()
-            # Attach role check: all module events require at least "operator"
-            socketio.on_event(event, _with_role("operator", wrapped))
+            # Read-only events allow viewer; everything else requires operator
+            _viewer_events = {"camera_list_devices", "settings_get"}
+            min_role = "viewer" if event in _viewer_events else "operator"
+            socketio.on_event(event, _with_role(min_role, wrapped))
         log.info("[GUI] Registered %d handler(s) for module '%s'", len(handlers), name)
 
 
@@ -445,27 +471,60 @@ def main():
     # Each module gracefully degrades to stub/standby when its SDK or
     # hardware is absent.  Set "enabled": false or remove the key to hide it.
     #
-    # ── All modules — enable what you need ───────────────────────────────
-    # Each module degrades to stub mode when SDK or hardware is absent.
-    # To hide a module from the GUI, remove it or set "enabled": false.
+    # ═══════════════════════════════════════════════════════════════════════
+    # 🦾 具身智能机器人 (Embodied Intelligence Robot) — Jetson AGX Orin
+    #    硬件: UR5e 机械臂 + AgileX UGV 底盘 + BrainCo 灵巧手
+    #          + 升降平台 (CAN bus) + 双目摄像头
+    #    config = {
+    #        "arm":    {"host": "192.168.56.101"},
+    #        "ugv":    {"host": "127.0.0.1", "port": 9100},
+    #        "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
+    #        "camera": {"devices": ["/dev/video6", "/dev/video4"]},
+    #        "motor":  {},
+    #        "hand":   {"protocol": "can", "can_iface": "can1", "master_id": 1, "slave_id": 0x02},
+    #        # candleLight USB-CAN FD adapter (Windows, no SocketCAN)
+    #        # "hand":   {"protocol": "can_candlelight", "master_id": 1,
+    #        #            "slave_id": 0x7E, "candlelight_channel": 0},
+    #    }
+    #
+    # ── All modules (embodied intelligence robot default) ────────────────
+    # config = {
+    #     "arm":    {"host": "192.168.56.101"},
+    #     "ugv":    {"host": "127.0.0.1", "port": 9100},
+    #     "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
+    #     "camera": {"devices": ["/dev/video6", "/dev/video4"]},
+    #     "motor":  {},
+    #     "hand":   {"protocol": "can", "can_iface": "can1", "master_id": 1, "slave_id": 0x02},
+    # }
+    #
+    # ── Jetson AGX Orin (full embodied intelligence robot) — active ─────
     config = {
-        "camera": {"devices": ["/dev/video1"]},
+        "arm":    {"host": "192.168.56.101"},
+        "ugv":    {"host": "127.0.0.1", "port": 9100},
+        "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
+        "camera": {"devices": ["/dev/video6", "/dev/video4"]},
         "motor":  {},
-        "joint":  {},
-        "drive":  {},
-        "demo":   {},
+        # port omitted = auto-detect RS485
+        "hand":   {"protocol": "modbus", "baudrate": 460800, "slave_id": 0x7F},
+        "teleop": {"host": "192.168.56.101"},
     }
     #
-    # ── Pipe robot minimal ──────────────────────────────────────────────
-    # config = {"camera": {...}, "motor": {}, "lift": {...}}
+    # ═══════════════════════════════════════════════════════════════════════
+    # 🔧 管道机器人 (Pipe Robot) — 区别于具身智能机器人
+    #    硬件: 驱动电机 + 舵机/关节 + 摄像头 + 升降平台
+    #    config = {
+    #        "camera": {"devices": ["/dev/video1"]},
+    #        "motor":  {},
+    #        "joint":  {},
+    #        "drive":  {},
+    #        "demo":   {},
+    #    }
+    #
+    # 🔧 管道机器人 Mini (Pipe Robot Mini) — 精简版 (Camera + Motor only)
+    #    config = {"camera": {...}, "motor": {}}
 
     robot = Robot(config)
     robot.start()
-
-    # Wire demo module to joint + drive for direct hardware control
-    demo = robot.modules.get("demo")
-    if demo:
-        demo.set_modules(robot.modules.get("joint"), robot.modules.get("drive"))
 
     # Register dynamic SocketIO handlers from loaded modules
     _register_module_handlers(robot)

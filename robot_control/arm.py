@@ -159,6 +159,9 @@ class ArmController(RobotModule):
         self._add_log("info", f"断开动力 — {r}")
 
     def move_joints(self, angles_deg: List[float], speed_pct: float = 20.0) -> bool:
+        if getattr(self, '_teleop_active', False):
+            log.warning("[Arm] Teleop active — rejecting move_joints")
+            return False
         rads = [math.radians(a) for a in angles_deg]
         a_j, v_j, _, _ = self._speed_to_params(speed_pct)
         script = (
@@ -178,6 +181,9 @@ class ArmController(RobotModule):
     def move_cartesian(self, x: float, y: float, z: float,
                        roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0,
                        speed_pct: float = 20.0) -> bool:
+        if getattr(self, '_teleop_active', False):
+            log.warning("[Arm] Teleop active — rejecting move_cartesian")
+            return False
         x_m, y_m, z_m = x / 1000.0, y / 1000.0, z / 1000.0
         _, _, a_c, v_c = self._speed_to_params(speed_pct)
         script = (

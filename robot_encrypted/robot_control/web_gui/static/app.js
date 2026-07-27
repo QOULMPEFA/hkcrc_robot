@@ -10,6 +10,10 @@ const MODULE_META = {
   arm:    { icon: "🦾", name: "机械臂",   i18nKey: "module.arm",    stub: false },
   hand:   { icon: "🤖", name: "灵巧手",   i18nKey: "module.hand",   stub: false },
   motor:  { icon: "⚙",  name: "电机控制", i18nKey: "module.motor",  stub: false },
+  servo:  { icon: "⚡", name: "总线舵机", i18nKey: "module.servo",  stub: false },
+  joint:  { icon: "🔧", name: "关节控制", i18nKey: "module.joint", stub: false },
+  drive:  { icon: "🚗", name: "驱动电机", i18nKey: "module.drive", stub: false },
+  demo:   { icon: "🎬", name: "演示序列", i18nKey: "module.demo",  stub: false },
 };
 function _modName(meta) { return meta.i18nKey ? I18n.t(meta.i18nKey) : meta.name; }
 let ACTIVE_MODULES = [];
@@ -484,6 +488,14 @@ const KeyBindingManager = {
     "2":          "hand.close",
     "3":          "hand.pinch",
     "4":          "hand.send",
+    // Servo
+    "5":          "servo.spread",
+    "6":          "servo.shrink",
+    "7":          "servo.stop",
+    // Joint (waist)
+    "8":          "joint.shrink",
+    "9":          "joint.spread",
+    "0":          "joint.stop",
   },
 
   _actions: {
@@ -551,6 +563,31 @@ const KeyBindingManager = {
                          fn: ()=>socket.emit("hand_pinch") },
     "hand.send":       { type:"click", module:"hand", descKey:"hand.send",
                          fn: ()=>{ const p=_getActivePanelId("hand"); if(!p)return; const pos=[0,1,2,3,4].map(i=>{const inp=el(p+`-hand-f${i}`);return inp?parseFloat(inp.value):0}); socket.emit("hand_set_fingers",{positions:pos,speed_pct:50}); } },
+
+    "servo.spread":    { type:"click", module:"servo", descKey:"servo.spread",
+                         fn: ()=>{ const p=_getActivePanelId("servo"); if(!p)return; const slH=el(p+"-servo-head-angle"),slT=el(p+"-servo-tail-angle"),slS=el(p+"-sl-servo-speed"); socket.emit("servo_spread",{head_angle:parseFloat(slH?.value||90),tail_angle:parseFloat(slT?.value||-90),mean_dps:parseFloat(slS?.value||200)}); } },
+    "servo.shrink":    { type:"click", module:"servo", descKey:"servo.shrink",
+                         fn: ()=>{ const p=_getActivePanelId("servo"); if(!p)return; const slS=el(p+"-sl-servo-speed"); socket.emit("servo_shrink",{head_angle:0,tail_angle:0,mean_dps:parseFloat(slS?.value||200)}); } },
+    "servo.stop":      { type:"click", module:"servo", descKey:"servo.stop",
+                         fn: ()=>socket.emit("servo_stop",{}) },
+
+    "joint.spread":    { type:"hold", module:"joint", descKey:"joint.waist_spread",
+                         startFn: ()=>socket.emit("joint_waist_spread", {}),
+                         stopFn:  ()=>socket.emit("joint_waist_stop"), interval:80 },
+    "joint.shrink":    { type:"hold", module:"joint", descKey:"joint.waist_shrink",
+                         startFn: ()=>socket.emit("joint_waist_shrink", {}),
+                         stopFn:  ()=>socket.emit("joint_waist_stop"), interval:80 },
+    "joint.stop":      { type:"click", module:"joint", descKey:"joint.stop",
+                         fn: ()=>socket.emit("joint_stop") },
+
+    "drive.forward":   { type:"hold", module:"drive", descKey:"drive.forward",
+                         startFn: ()=>socket.emit("drive_forward"),
+                         stopFn:  ()=>socket.emit("drive_stop"), interval:50 },
+    "drive.backward":  { type:"hold", module:"drive", descKey:"drive.backward",
+                         startFn: ()=>socket.emit("drive_backward"),
+                         stopFn:  ()=>socket.emit("drive_stop"), interval:50 },
+    "drive.stop":      { type:"click", module:"drive", descKey:"drive.stop",
+                         fn: ()=>socket.emit("drive_stop") },
 
     "global.estop":    { type:"click", module:"global", descKey:"header.estop",
                          fn: ()=>{ const btn=el("btn-estop"); if(btn) btn.click(); } },
@@ -629,7 +666,7 @@ const KeyBindingManager = {
     if (!tbody) return;
     const shown = new Set();
     tbody.innerHTML = "";
-    ["motor","ugv","lift","arm","hand","global"].forEach(mod => {
+    ["motor","ugv","lift","arm","hand","servo","joint","drive","global"].forEach(mod => {
       if (mod !== "global" && !ACTIVE_MODULES.includes(mod)) return;
       for (const [actionId, action] of Object.entries(this._actions)) {
         if (action.module !== mod) continue;
@@ -753,6 +790,10 @@ function _renderPanelContent(panelId, module) {
     case "arm":    _renderArmPanel(panelId, body); break;
     case "hand":   _renderHandPanel(panelId, body); break;
     case "motor":  _renderMotorPanel(panelId, body); break;
+    case "servo":  _renderServoPanel(panelId, body); break;
+    case "joint":  _renderJointPanel(panelId, body); break;
+    case "drive":  _renderDrivePanel(panelId, body); break;
+    case "demo":   _renderDemoPanel(panelId, body); break;
     default:       body.innerHTML = `<div style="color:var(--muted);padding:20px;text-align:center">${I18n.t("misc.no_ui", [module])}</div>`; break;
   }
 }
@@ -1237,6 +1278,321 @@ function _renderMotorPanel(panelId, body) {
   });
 }
 
+// ── Joint Panel (waist + pan/tilt) ──────────────────────────────────────────────
+
+function _renderJointPanel(panelId, body) {
+  const t = (k) => I18n.t(k);
+  body.innerHTML = `
+    <div class="panel-info">
+      <span>${t("hand.status")}<b id="${panelId}-joint-connected">—</b></span>
+      <span>${t("motor.direction")}<b id="${panelId}-joint-direction">${t("motor.stop")}</b></span>
+      <span>H:<b id="${panelId}-joint-h">0°</b> P:<b id="${panelId}-joint-p">0°</b></span>
+    </div>
+    <div class="panel-info" style="font-size:11px">
+      <span>H1:<b id="${panelId}-joint-h1">0°</b> H2:<b id="${panelId}-joint-h2">0°</b></span>
+      <span>P1:<b id="${panelId}-joint-p1">0°</b> P2:<b id="${panelId}-joint-p2">0°</b></span>
+    </div>
+    <div class="panel-info" style="font-size:11px">
+      <span>${t("joint.head20")}:<b id="${panelId}-joint-head">0°</b></span>
+      <span>${t("joint.tail10")}:<b id="${panelId}-joint-tail">0°</b></span>
+    </div>
+    <div style="display:flex;justify-content:center;gap:24px;padding:8px;flex-wrap:wrap">
+      <!-- waist -->
+      <div style="text-align:center">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">${t("joint.waist")}</div>
+        <button class="dpad-btn ctrl waist-btn" data-waist="spread" style="width:50px;height:50px;margin:2px;font-size:20px">${t("joint.waist_spread")}</button>
+        <button class="dpad-btn ctrl waist-btn" data-waist="shrink" style="width:50px;height:50px;margin:2px;font-size:20px">${t("joint.waist_shrink")}</button>
+        <br/>
+        <button class="dpad-btn ctrl" id="${panelId}-joint-waist-stop" style="width:104px;height:32px;margin:2px">${t("joint.stop")}</button>
+      </div>
+      <!-- pan/tilt -->
+      <div style="text-align:center">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">${t("joint.pt")}</div>
+        <button class="dpad-btn ctrl pt-btn" data-pt="up" style="width:50px;height:50px;margin:2px">▲</button>
+        <br/>
+        <button class="dpad-btn ctrl pt-btn" data-pt="left" style="width:50px;height:50px;margin:2px">◄</button>
+        <button class="dpad-btn ctrl pt-btn" data-pt="right" style="width:50px;height:50px;margin:2px">►</button>
+        <br/>
+        <button class="dpad-btn ctrl pt-btn" data-pt="down" style="width:50px;height:50px;margin:2px">▼</button>
+        <br/>
+        <button class="dpad-btn ctrl pt-btn" data-pt="home" style="width:50px;height:32px;margin:2px">${t("joint.pt_home")}</button>
+        <button class="dpad-btn ctrl" id="${panelId}-joint-pt-stop" style="width:50px;height:32px;margin:2px">${t("joint.stop")}</button>
+      </div>
+    </div>
+    <!-- limits -->
+    <div class="joint-limits" style="padding:6px 8px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap;justify-content:center;font-size:11px">
+      <span><span data-i18n="joint.h_limit">H</span>:
+        <input type="number" id="${panelId}-joint-hmin" value="-300" style="width:48px;height:20px;font-size:10px;text-align:center">~
+        <input type="number" id="${panelId}-joint-hmax" value="300" style="width:48px;height:20px;font-size:10px;text-align:center">°
+      </span>
+      <span><span data-i18n="joint.p_limit">P</span>:
+        <input type="number" id="${panelId}-joint-pmin" value="-300" style="width:48px;height:20px;font-size:10px;text-align:center">~
+        <input type="number" id="${panelId}-joint-pmax" value="300" style="width:48px;height:20px;font-size:10px;text-align:center">°
+      </span>
+      <span>${t("joint.wh_limit")}:
+        <input type="number" id="${panelId}-joint-whmin" value="850" style="width:48px;height:20px;font-size:10px;text-align:center">~
+        <input type="number" id="${panelId}-joint-whmax" value="2100" style="width:48px;height:20px;font-size:10px;text-align:center">°
+      </span>
+      <span>${t("joint.wt_limit")}:
+        <input type="number" id="${panelId}-joint-wtmin" value="-180" style="width:48px;height:20px;font-size:10px;text-align:center">~
+        <input type="number" id="${panelId}-joint-wtmax" value="1070" style="width:48px;height:20px;font-size:10px;text-align:center">°
+      </span>
+      <button class="btn-secondary btn-sm" id="${panelId}-joint-apply-limits" style="height:20px;font-size:10px;padding:0 4px">${t("header.apply")}</button>
+    </div>
+  `;
+
+  // Waist buttons — hold to spread/shrink, release to stop
+  const waistMap = { spread: "joint_waist_spread", shrink: "joint_waist_shrink" };
+  body.querySelectorAll(".waist-btn").forEach((btn) => {
+    const dir = btn.dataset.waist;
+    if (!waistMap[dir]) return;
+    const event = waistMap[dir];
+    let interval = null;
+    btn.addEventListener("pointerdown", (e) => {
+      btn.setPointerCapture(e.pointerId);
+      socket.emit(event);
+      interval = setInterval(() => socket.emit(event), 80);
+    });
+    btn.addEventListener("pointerup", () => {
+      clearInterval(interval); interval = null;
+      socket.emit("joint_waist_stop");
+    });
+    btn.addEventListener("pointerleave", () => {
+      clearInterval(interval); interval = null;
+      socket.emit("joint_waist_stop");
+    });
+  });
+  // Pan/tilt buttons — hold to move, release to stop
+  const ptMap = {
+    up: "joint_pt_up", down: "joint_pt_down",
+    left: "joint_pt_left", right: "joint_pt_right",
+    home: "joint_pt_home",
+  };
+  body.querySelectorAll(".pt-btn").forEach((btn) => {
+    const action = btn.dataset.pt;
+    if (!ptMap[action]) return;
+    const event = ptMap[action];
+    if (action === "home") {
+      btn.addEventListener("pointerdown", () => socket.emit(event));
+      return;
+    }
+    let interval = null;
+    btn.addEventListener("pointerdown", (e) => {
+      btn.setPointerCapture(e.pointerId);
+      socket.emit(event);
+      interval = setInterval(() => socket.emit(event), 80);
+    });
+    btn.addEventListener("pointerup", () => {
+      clearInterval(interval); interval = null;
+      socket.emit("joint_pt_stop");
+    });
+    btn.addEventListener("pointerleave", () => {
+      clearInterval(interval); interval = null;
+      socket.emit("joint_pt_stop");
+    });
+  });
+  // Stop buttons
+  const wStopBtn = el(panelId + "-joint-waist-stop");
+  if (wStopBtn) wStopBtn.addEventListener("pointerdown", () => socket.emit("joint_waist_stop"));
+  const ptStopBtn = el(panelId + "-joint-pt-stop");
+  if (ptStopBtn) ptStopBtn.addEventListener("pointerdown", () => socket.emit("joint_pt_stop"));
+  // Limit apply button
+  const applyBtn = el(panelId + "-joint-apply-limits");
+  if (applyBtn) {
+    applyBtn.addEventListener("click", () => {
+      socket.emit("joint_set_limits", {
+        h_min: parseInt(el(panelId + "-joint-hmin").value) || -300,
+        h_max: parseInt(el(panelId + "-joint-hmax").value) || 300,
+        p_min: parseInt(el(panelId + "-joint-pmin").value) || -300,
+        p_max: parseInt(el(panelId + "-joint-pmax").value) || 300,
+        wh_min: parseInt(el(panelId + "-joint-whmin").value) || 850,
+        wh_max: parseInt(el(panelId + "-joint-whmax").value) || 2100,
+        wt_min: parseInt(el(panelId + "-joint-wtmin").value) || -180,
+        wt_max: parseInt(el(panelId + "-joint-wtmax").value) || 1070,
+      });
+    });
+  }
+  // Request current limits
+  socket.emit("joint_get_limits");
+}
+
+// ── Drive Panel ─────────────────────────────────────────────────────────────────
+
+function _renderDrivePanel(panelId, body) {
+  const t = (k) => I18n.t(k);
+  body.innerHTML = `
+    <div class="panel-info">
+      <span>${t("hand.status")}<b id="${panelId}-drive-connected">—</b></span>
+      <span>${t("motor.direction")}<b id="${panelId}-drive-direction">${t("motor.stop")}</b></span>
+    </div>
+    <div style="text-align:center;padding:8px">
+      <button class="dpad-btn ctrl drive-btn" data-dir="forward" style="width:60px;height:60px;margin:2px">▲</button>
+      <br/>
+      <button class="dpad-btn ctrl drive-btn" data-dir="backward" style="width:60px;height:60px;margin:2px">▼</button>
+      <br/>
+      <button class="dpad-btn ctrl drive-btn" data-dir="stop" style="width:60px;height:60px;margin:2px">■</button>
+    </div>
+  `;
+  const dirMap = { forward: "drive_forward", backward: "drive_backward", stop: "drive_stop" };
+  body.querySelectorAll(".drive-btn").forEach((btn) => {
+    btn.addEventListener("pointerdown", () => {
+      const dir = btn.dataset.dir;
+      if (dirMap[dir]) socket.emit(dirMap[dir]);
+    });
+    if (btn.dataset.dir !== "stop") {
+      btn.addEventListener("pointerup", () => socket.emit("drive_stop"));
+      btn.addEventListener("pointerleave", () => socket.emit("drive_stop"));
+    }
+  });
+}
+
+// ── Servo Panel ────────────────────────────────────────────────────────────────
+function _renderServoPanel(panelId, body) {
+  const t = (k) => I18n.t(k);
+  body.innerHTML = `
+    <div class="status-row">
+      <span>${t("servo.connection")}<b id="${panelId}-servo-connected">—</b></span>
+      <span>${t("servo.direction")}<b id="${panelId}-servo-direction">${t("servo.stop")}</b></span>
+    </div>
+    <div class="slider-row">
+      <label>${t("servo.speed")} <span id="${panelId}-lbl-servo-speed">200</span>
+        <input type="range" id="${panelId}-sl-servo-speed" min="10" max="500" step="10" value="200" />
+      </label>
+      <label>${t("servo.power")} <span id="${panelId}-lbl-servo-power">4000</span>
+        <input type="range" id="${panelId}-sl-servo-power" min="500" max="8000" step="100" value="4000" />
+      </label>
+    </div>
+    <div class="joint-section">
+      <div class="section-title">${t("servo.head_joint")} <span class="servo-ids" id="${panelId}-servo-head-ids"></span></div>
+      <div class="joint-row servo-joint-row">
+        <label>${t("servo.angle")}</label>
+        <button class="dpad-btn" style="width:28px;height:28px;font-size:14px" data-servo="head" data-d="-5">◀</button>
+        <input type="range" id="${panelId}-servo-head-angle" min="-135" max="135" step="1" value="90" />
+        <button class="dpad-btn" style="width:28px;height:28px;font-size:14px" data-servo="head" data-d="5">▶</button>
+        <span class="val" id="${panelId}-servo-head-angle-val">90°</span>
+      </div>
+      <div class="servo-monitor" id="${panelId}-servo-head-monitor">
+        <span>${t("servo.voltage")}— V</span>
+        <span>${t("servo.current")}— A</span>
+        <span>${t("servo.temp")}— °C</span>
+      </div>
+    </div>
+    <div class="joint-section">
+      <div class="section-title">${t("servo.tail_joint")} <span class="servo-ids" id="${panelId}-servo-tail-ids"></span></div>
+      <div class="joint-row servo-joint-row">
+        <label>${t("servo.angle")}</label>
+        <button class="dpad-btn" style="width:28px;height:28px;font-size:14px" data-servo="tail" data-d="-5">◀</button>
+        <input type="range" id="${panelId}-servo-tail-angle" min="-135" max="135" step="1" value="-90" />
+        <button class="dpad-btn" style="width:28px;height:28px;font-size:14px" data-servo="tail" data-d="5">▶</button>
+        <span class="val" id="${panelId}-servo-tail-angle-val">-90°</span>
+      </div>
+      <div class="servo-monitor" id="${panelId}-servo-tail-monitor">
+        <span>${t("servo.voltage")}— V</span>
+        <span>${t("servo.current")}— A</span>
+        <span>${t("servo.temp")}— °C</span>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn-primary ctrl"   id="${panelId}-servo-spread" data-bind-action="servo.spread">${t("servo.spread")}</button>
+      <button class="btn-primary ctrl"   id="${panelId}-servo-shrink" data-bind-action="servo.shrink">${t("servo.shrink")}</button>
+      <button class="btn-warn ctrl"      id="${panelId}-servo-stop" data-bind-action="servo.stop">${t("servo.stop")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-servo-damping" data-bind-action="servo.damping">${t("servo.damping")}</button>
+    </div>
+  `;
+
+  const slSpeed = el(panelId + "-sl-servo-speed");
+  const slPower = el(panelId + "-sl-servo-power");
+  const slHead  = el(panelId + "-servo-head-angle");
+  const slTail  = el(panelId + "-servo-tail-angle");
+
+  if (slSpeed) slSpeed.addEventListener("input", () => {
+    const lbl = el(panelId + "-lbl-servo-speed"); if (lbl) lbl.textContent = slSpeed.value;
+  });
+  if (slPower) slPower.addEventListener("input", () => {
+    const lbl = el(panelId + "-lbl-servo-power"); if (lbl) lbl.textContent = slPower.value;
+  });
+
+  const _sendHeadAngle = () => {
+    const ang = parseFloat(slHead?.value || 90);
+    const spd = parseFloat(slSpeed?.value || 200);
+    const pwr = parseInt(slPower?.value || 4000);
+    socket.emit("servo_set_angle", { servo_id: 20, angle: ang, mean_dps: spd, power: pwr, is_mturn: true });
+  };
+  const _sendTailAngle = () => {
+    const ang = parseFloat(slTail?.value || -90);
+    const spd = parseFloat(slSpeed?.value || 200);
+    const pwr = parseInt(slPower?.value || 4000);
+    socket.emit("servo_set_angle", { servo_id: 10, angle: ang, mean_dps: spd, power: pwr, is_mturn: true });
+  };
+
+  [slHead, slTail].forEach((sl) => {
+    if (!sl) return;
+    sl.addEventListener("input", (e) => {
+      const id = e.target.id.includes("head") ? "head" : "tail";
+      const valEl = el(panelId + `-servo-${id}-angle-val`);
+      if (valEl) valEl.textContent = parseFloat(e.target.value).toFixed(0) + "°";
+    });
+    sl.addEventListener("change", () => {
+      if (sl === slHead) _sendHeadAngle(); else _sendTailAngle();
+    });
+  });
+
+  // Fine-adjust buttons
+  body.querySelectorAll(".dpad-btn[data-servo]").forEach((btn) => {
+    let interval = null;
+    btn.addEventListener("pointerdown", (e) => {
+      btn.setPointerCapture(e.pointerId);
+      const delta = parseFloat(btn.dataset.d);
+      const isHead = btn.dataset.servo === "head";
+      const sl = isHead ? slHead : slTail;
+      const update = () => {
+        if (sl) {
+          sl.value = Math.max(-135, Math.min(135, parseFloat(sl.value) + delta));
+          sl.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      };
+      update();
+      interval = setInterval(update, 100);
+    });
+    btn.addEventListener("pointerup", () => {
+      if (interval) { clearInterval(interval); interval = null; }
+      if (btn.dataset.servo === "head") _sendHeadAngle(); else _sendTailAngle();
+    });
+    btn.addEventListener("pointercancel", () => {
+      if (interval) { clearInterval(interval); interval = null; }
+    });
+  });
+
+  // Action buttons
+  const btnSpread  = el(panelId + "-servo-spread");
+  const btnShrink  = el(panelId + "-servo-shrink");
+  const btnStop    = el(panelId + "-servo-stop");
+  const btnDamping = el(panelId + "-servo-damping");
+
+  if (btnSpread) btnSpread.addEventListener("click", () => {
+    socket.emit("servo_spread", {
+      head_angle: parseFloat(slHead?.value || 90),
+      tail_angle: parseFloat(slTail?.value || -90),
+      mean_dps: parseFloat(slSpeed?.value || 200),
+    });
+  });
+  if (btnShrink) btnShrink.addEventListener("click", () => {
+    socket.emit("servo_shrink", {
+      head_angle: 0,
+      tail_angle: 0,
+      mean_dps: parseFloat(slSpeed?.value || 200),
+    });
+  });
+  if (btnStop) btnStop.addEventListener("click", () => socket.emit("servo_stop", {}));
+  if (btnDamping) btnDamping.addEventListener("click", () => {
+    const pwr = parseInt(slPower?.value || 500);
+    socket.emit("servo_set_damping", { servo_id: 20, power: pwr });
+    socket.emit("servo_set_damping", { servo_id: 10, power: pwr });
+  });
+
+  body.dataset.panelId = panelId;
+}
+
 function _updateCameraStatus(panelId, state) {
   const statusEl = el(panelId + "-cam-status");
   const resetBtn = el(panelId + "-cam-reset");
@@ -1303,6 +1659,176 @@ function _updateMotorState(panelId, s) {
   }
 }
 
+function _updateJointState(panelId, s) {
+  _maybeSet(el(panelId + "-joint-connected"), s.connected ? I18n.t("motor.connected") : I18n.t("motor.mock"));
+  const dirEl = el(panelId + "-joint-direction");
+  if (dirEl) {
+    const labels = { spread: I18n.t("joint.waist_spread"), shrink: I18n.t("joint.waist_shrink"), stop: I18n.t("joint.stop") };
+    dirEl.textContent = labels[s.direction] || s.direction || I18n.t("joint.stop");
+  }
+  const hEl = el(panelId + "-joint-h");
+  const pEl = el(panelId + "-joint-p");
+  if (hEl) hEl.textContent = (s.h_angle != null ? s.h_angle.toFixed(1) : "0") + "°";
+  if (pEl) pEl.textContent = (s.p_angle != null ? s.p_angle.toFixed(1) : "0") + "°";
+  const fmtAngle = (v) => (v != null ? v.toFixed(1) : "0.0") + "°";
+  _maybeSet(el(panelId + "-joint-h1"), fmtAngle(s.h1_angle));
+  _maybeSet(el(panelId + "-joint-h2"), fmtAngle(s.h2_angle));
+  _maybeSet(el(panelId + "-joint-p1"), fmtAngle(s.p1_angle));
+  _maybeSet(el(panelId + "-joint-p2"), fmtAngle(s.p2_angle));
+  _maybeSet(el(panelId + "-joint-head"), fmtAngle(s.head_angle));
+  _maybeSet(el(panelId + "-joint-tail"), fmtAngle(s.tail_angle));
+}
+
+function _updateDriveState(panelId, s) {
+  _maybeSet(el(panelId + "-drive-connected"), s.connected ? I18n.t("motor.connected") : I18n.t("motor.mock"));
+  const dirEl = el(panelId + "-drive-direction");
+  if (dirEl) {
+    const labels = { forward: I18n.t("drive.forward"), backward: I18n.t("drive.backward"), stop: I18n.t("drive.stop") };
+    dirEl.textContent = labels[s.direction] || s.direction || I18n.t("drive.stop");
+  }
+}
+
+// ── Demo Panel ────────────────────────────────────────────────────────────────
+
+function _renderDemoPanel(panelId, body) {
+  const t = (k) => I18n.t(k);
+  const cfgFields = [
+    ["init_wait",        t("demo.cfg_init_wait"),        0.5, 10,  0.1],
+    ["spread_wait",      t("demo.cfg_spread_wait"),      0.5, 10,  0.1],
+    ["drive_duration",   t("demo.cfg_drive_duration"),   0.5, 10,  0.1],
+    ["drive_stop_pause", t("demo.cfg_drive_stop_pause"), 0.1, 5,   0.1],
+    ["pt_duration",      t("demo.cfg_pt_duration"),      0.5, 10,  0.1],
+    ["pt_stop_pause",    t("demo.cfg_pt_stop_pause"),    0.1, 5,   0.1],
+    ["pause_after_home", t("demo.cfg_pause_after_home"), 0.5, 10,  0.1],
+    ["cycle_wait",       t("demo.cfg_cycle_wait"),       0.5, 30,  0.5],
+  ];
+  let cfgHTML = cfgFields.map(([key, label, min, max, step]) =>
+    `<label>${label}<input type="number" id="${panelId}-cfg-${key}" min="${min}" max="${max}" step="${step}" value="0" style="width:56px;height:20px;font-size:10px;text-align:center;margin-left:4px">s</label>`
+  ).join("");
+
+  body.innerHTML = `
+    <div class="panel-info">
+      <span>${t("hand.status")}<b id="${panelId}-demo-status">${t("demo.idle")}</b></span>
+      <span>${t("demo.step")}<b id="${panelId}-demo-step">—</b></span>
+    </div>
+    <div style="text-align:center;padding:8px">
+      <button class="btn-primary" id="${panelId}-demo-start" style="width:100px;height:42px;font-size:15px;margin:4px">${t("demo.start")}</button>
+      <button class="btn-estop" id="${panelId}-demo-stop" style="width:100px;height:42px;font-size:15px;margin:4px">${t("demo.stop")}</button>
+    </div>
+    <div class="demo-config" style="padding:4px 8px;border-top:1px solid var(--border);font-size:10px;display:flex;flex-wrap:wrap;gap:4px 12px;justify-content:center">
+      ${cfgHTML}
+    </div>
+    <div style="text-align:center;padding:4px">
+      <button class="btn-secondary btn-sm" id="${panelId}-demo-apply-config" style="height:22px;font-size:10px">${t("demo.apply_config")}</button>
+    </div>
+    <div style="color:var(--muted);font-size:10px;text-align:center;padding:2px 8px 6px">
+      ${t("demo.desc")}
+    </div>
+  `;
+  el(panelId + "-demo-start").addEventListener("click", () => socket.emit("demo_start"));
+  el(panelId + "-demo-stop").addEventListener("click", () => socket.emit("demo_stop"));
+  el(panelId + "-demo-apply-config").addEventListener("click", () => {
+    const cfg = {};
+    cfgFields.forEach(([key]) => {
+      const inp = el(panelId + "-cfg-" + key);
+      if (inp) cfg[key] = parseFloat(inp.value);
+    });
+    socket.emit("demo_set_config", cfg);
+  });
+  // Request current config
+  socket.emit("demo_get_config");
+}
+
+function _updateDemoState(panelId, s) {
+  _maybeSet(el(panelId + "-demo-status"), s.active ? I18n.t("demo.running") : I18n.t("demo.idle"));
+  _maybeSet(el(panelId + "-demo-step"), s.step ? I18n.t("demo.step_" + s.step) || s.step : "—");
+  const startBtn = el(panelId + "-demo-start");
+  if (startBtn) startBtn.disabled = s.active;
+  // Update config inputs if present
+  if (s.config) _applyDemoConfig(panelId, s.config);
+}
+
+function _applyDemoConfig(panelId, cfg) {
+  for (const [key, val] of Object.entries(cfg)) {
+    const inp = el(panelId + "-cfg-" + key);
+    if (inp) inp.value = val;
+  }
+}
+
+socket.on("demo_config", (data) => {
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "demo") return;
+    _applyDemoConfig(panelId, data);
+  });
+});
+
+socket.on("demo_status", (data) => {
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "demo") return;
+    _maybeSet(el(panelId + "-demo-status"), data.active ? I18n.t("demo.running") : I18n.t("demo.idle"));
+    const startBtn = el(panelId + "-demo-start");
+    if (startBtn) startBtn.disabled = data.active;
+  });
+});
+
+function _updateServoState(panelId, s) {
+  _maybeSet(el(panelId + "-servo-connected"), s.connected ? I18n.t("servo.connected") : I18n.t("servo.mock"));
+  const dirEl = el(panelId + "-servo-direction");
+  if (dirEl) {
+    const labels = { spread: I18n.t("servo.spread"), shrink: I18n.t("servo.shrink"), stop: I18n.t("servo.stop") };
+    dirEl.textContent = labels[s.direction] || s.direction;
+    dirEl.style.color = s.direction !== "stop" ? "var(--accent2)" : "var(--muted)";
+  }
+
+  // Display servo IDs
+  _maybeSet(el(panelId + "-servo-head-ids"), "ID: " + (s.head_ids || []).join(","));
+  _maybeSet(el(panelId + "-servo-tail-ids"), "ID: " + (s.tail_ids || []).join(","));
+
+  // Update monitor data for head (first head ID)
+  if (s.monitor && s.head_ids && s.head_ids.length > 0) {
+    const headId = s.head_ids[0];
+    const m = s.monitor[headId];
+    if (m) {
+      const headMon = el(panelId + "-servo-head-monitor");
+      if (headMon) {
+        const spans = headMon.querySelectorAll("span");
+        if (spans[0]) spans[0].innerHTML = I18n.t("servo.voltage") + "<b>" + (m.voltage ? (m.voltage / 1000).toFixed(1) + " V" : "—") + "</b>";
+        if (spans[1]) spans[1].innerHTML = I18n.t("servo.current") + "<b>" + (m.current ? (m.current / 1000).toFixed(2) + " A" : "—") + "</b>";
+        if (spans[2]) spans[2].innerHTML = I18n.t("servo.temp") + "<b>" + (m.temp != null ? m.temp.toFixed(0) + " °C" : "—") + "</b>";
+      }
+      // Update angle slider
+      if (m.angle != null) {
+        const sl = el(panelId + "-servo-head-angle");
+        const valEl = el(panelId + "-servo-head-angle-val");
+        if (sl && !sl.matches(":active")) sl.value = m.angle;
+        if (valEl) valEl.textContent = m.angle.toFixed(0) + "°";
+      }
+    }
+  }
+
+  // Update monitor data for tail (first tail ID)
+  if (s.monitor && s.tail_ids && s.tail_ids.length > 0) {
+    const tailId = s.tail_ids[0];
+    const m = s.monitor[tailId];
+    if (m) {
+      const tailMon = el(panelId + "-servo-tail-monitor");
+      if (tailMon) {
+        const spans = tailMon.querySelectorAll("span");
+        if (spans[0]) spans[0].innerHTML = I18n.t("servo.voltage") + "<b>" + (m.voltage ? (m.voltage / 1000).toFixed(1) + " V" : "—") + "</b>";
+        if (spans[1]) spans[1].innerHTML = I18n.t("servo.current") + "<b>" + (m.current ? (m.current / 1000).toFixed(2) + " A" : "—") + "</b>";
+        if (spans[2]) spans[2].innerHTML = I18n.t("servo.temp") + "<b>" + (m.temp != null ? m.temp.toFixed(0) + " °C" : "—") + "</b>";
+      }
+      // Update angle slider
+      if (m.angle != null) {
+        const sl = el(panelId + "-servo-tail-angle");
+        const valEl = el(panelId + "-servo-tail-angle-val");
+        if (sl && !sl.matches(":active")) sl.value = m.angle;
+        if (valEl) valEl.textContent = m.angle.toFixed(0) + "°";
+      }
+    }
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // State Handler
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1346,6 +1872,22 @@ socket.on("robot_state", (s) => {
       case "motor":
         _updateMotorState(panelId, modState);
         PanelManager.updateStatus("motor", modState.connected, false);
+        break;
+      case "servo":
+        _updateServoState(panelId, modState);
+        PanelManager.updateStatus("servo", modState.connected, false);
+        break;
+      case "joint":
+        _updateJointState(panelId, modState);
+        PanelManager.updateStatus("joint", modState.connected, false);
+        break;
+      case "drive":
+        _updateDriveState(panelId, modState);
+        PanelManager.updateStatus("drive", modState.connected, false);
+        break;
+      case "demo":
+        _updateDemoState(panelId, modState);
+        PanelManager.updateStatus("demo", modState.active, false);
         break;
     }
   });
@@ -1577,6 +2119,9 @@ if (btnEstop) {
     if (ACTIVE_MODULES.includes("arm"))  socket.emit("arm_stop");
     if (ACTIVE_MODULES.includes("hand")) socket.emit("hand_stop");
     if (ACTIVE_MODULES.includes("motor")) socket.emit("motor_stop");
+    if (ACTIVE_MODULES.includes("servo")) socket.emit("servo_stop");
+    if (ACTIVE_MODULES.includes("joint")) { socket.emit("joint_waist_stop"); socket.emit("joint_pt_stop"); }
+    if (ACTIVE_MODULES.includes("drive")) socket.emit("drive_stop");
   });
 }
 
@@ -1670,6 +2215,17 @@ socket.on("lift_limits", (data) => {
   // Update presets in all open lift panels
   PanelManager._panels.forEach((p, panelId) => {
     if (p.module === "lift") _rebuildPresetsFor(panelId, data.min_mm, data.max_mm);
+  });
+});
+
+socket.on("joint_limits", (data) => {
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "joint") return;
+    const setVal = (id, v) => { const e = el(panelId + id); if (e) e.value = v; };
+    setVal("-joint-hmin", data.h_min); setVal("-joint-hmax", data.h_max);
+    setVal("-joint-pmin", data.p_min); setVal("-joint-pmax", data.p_max);
+    setVal("-joint-whmin", data.wh_min); setVal("-joint-whmax", data.wh_max);
+    setVal("-joint-wtmin", data.wt_min); setVal("-joint-wtmax", data.wt_max);
   });
 });
 

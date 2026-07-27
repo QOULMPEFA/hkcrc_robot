@@ -14,6 +14,7 @@ const MODULE_META = {
   joint:  { icon: "🔧", name: "关节控制", i18nKey: "module.joint", stub: false },
   drive:  { icon: "🚗", name: "驱动电机", i18nKey: "module.drive", stub: false },
   demo:   { icon: "🎬", name: "演示序列", i18nKey: "module.demo",  stub: false },
+  teleop: { icon: "🥽", name: "XR 遥操作", i18nKey: "module.teleop", stub: false },
 };
 function _modName(meta) { return meta.i18nKey ? I18n.t(meta.i18nKey) : meta.name; }
 let ACTIVE_MODULES = [];
@@ -23,7 +24,7 @@ const fmt = (v, d = 2) => (typeof v === "number" ? v.toFixed(d) : "—");
 
 // ── Socket ───────────────────────────────────────────────────────────────────
 I18n.init();
-const socket = io({ transports: ["websocket"], query: { lang: I18n._lang } });
+const socket = io({ transports: ["websocket", "polling"], query: { lang: I18n._lang } });
 
 const connBadge = el("conn-badge");
 socket.on("connect", () => {
@@ -487,7 +488,7 @@ const KeyBindingManager = {
     "1":          "hand.open",
     "2":          "hand.close",
     "3":          "hand.pinch",
-    "4":          "hand.send",
+    // "4": formerly hand.send — removed, slider changes emit directly
     // Servo
     "5":          "servo.spread",
     "6":          "servo.shrink",
@@ -561,9 +562,6 @@ const KeyBindingManager = {
                          fn: ()=>socket.emit("hand_close") },
     "hand.pinch":      { type:"click", module:"hand", descKey:"hand.pinch",
                          fn: ()=>socket.emit("hand_pinch") },
-    "hand.send":       { type:"click", module:"hand", descKey:"hand.send",
-                         fn: ()=>{ const p=_getActivePanelId("hand"); if(!p)return; const pos=[0,1,2,3,4].map(i=>{const inp=el(p+`-hand-f${i}`);return inp?parseFloat(inp.value):0}); socket.emit("hand_set_fingers",{positions:pos,speed_pct:50}); } },
-
     "servo.spread":    { type:"click", module:"servo", descKey:"servo.spread",
                          fn: ()=>{ const p=_getActivePanelId("servo"); if(!p)return; const slH=el(p+"-servo-head-angle"),slT=el(p+"-servo-tail-angle"),slS=el(p+"-sl-servo-speed"); socket.emit("servo_spread",{head_angle:parseFloat(slH?.value||90),tail_angle:parseFloat(slT?.value||-90),mean_dps:parseFloat(slS?.value||200)}); } },
     "servo.shrink":    { type:"click", module:"servo", descKey:"servo.shrink",
@@ -794,6 +792,7 @@ function _renderPanelContent(panelId, module) {
     case "joint":  _renderJointPanel(panelId, body); break;
     case "drive":  _renderDrivePanel(panelId, body); break;
     case "demo":   _renderDemoPanel(panelId, body); break;
+    case "teleop": _renderTeleopPanel(panelId, body); break;
     default:       body.innerHTML = `<div style="color:var(--muted);padding:20px;text-align:center">${I18n.t("misc.no_ui", [module])}</div>`; break;
   }
 }
@@ -838,7 +837,11 @@ function _renderCameraPanel(panelId, body) {
       const dev = deviceSel.value;
       if (panel) panel.dataset.camDevice = dev;
       if (dev) {
-        img.src = "/stream/" + dev + "?_t=" + Date.now();
+        // Clear first to force browser to close old MJPEG connection
+        img.src = "";
+        setTimeout(() => {
+          img.src = "/stream/" + dev + "?token=" + (window.STREAM_TOKEN || "") + "&_t=" + Date.now();
+        }, 50);
         img.style.display = "block";
         if (err) err.style.display = "none";
       } else {
@@ -864,7 +867,11 @@ function _renderCameraPanel(panelId, body) {
     });
   }
 
-  // Request device list to populate dropdown
+  // Populate from embedded page data first (works for all roles, no SocketIO)
+  if (window.CAMERA_DEVICES && window.CAMERA_DEVICES.length > 0) {
+    _populateCameraDropdowns(window.CAMERA_DEVICES);
+  }
+  // Also request via SocketIO for live updates
   socket.emit("camera_list_devices");
 }
 
@@ -1193,11 +1200,10 @@ function _renderHandPanel(panelId, body) {
       <button class="btn-primary ctrl"   id="${panelId}-hand-open" data-bind-action="hand.open">${t("hand.open")}</button>
       <button class="btn-primary ctrl"   id="${panelId}-hand-close" data-bind-action="hand.close">${t("hand.close")}</button>
       <button class="btn-secondary ctrl" id="${panelId}-hand-pinch" data-bind-action="hand.pinch">${t("hand.pinch")}</button>
-      <button class="btn-secondary ctrl" id="${panelId}-hand-send" data-bind-action="hand.send">${t("hand.send")}</button>
     </div>
   `;
 
-  const FINGERS = ["hand.finger.0", "hand.finger.1", "hand.finger.2", "hand.finger.3", "hand.finger.4"];
+  const FINGERS = ["hand.finger.0", "hand.finger.1", "hand.finger.2", "hand.finger.3", "hand.finger.4", "hand.finger.5"];
   const grid = el(panelId + "-hand-fingers");
   if (grid) {
     FINGERS.forEach((key, i) => {
@@ -1212,23 +1218,24 @@ function _renderHandPanel(panelId, body) {
       row.querySelector("input").addEventListener("input", (e) => {
         const valEl = el(panelId + `-hand-f${i}-val`);
         if (valEl) valEl.textContent = Math.round(parseFloat(e.target.value) * 100) + "%";
+        _sendHandFingers(panelId);
       });
     });
+  }
+
+  function _sendHandFingers(pid) {
+    const pos = FINGERS.map((_, i) => {
+      const inp = el(pid + `-hand-f${i}`); return inp ? parseFloat(inp.value) : 0;
+    });
+    socket.emit("hand_set_fingers", { positions: pos, speed_pct: 50 });
   }
 
   const btnOpen  = el(panelId + "-hand-open");
   const btnClose = el(panelId + "-hand-close");
   const btnPinch = el(panelId + "-hand-pinch");
-  const btnSend  = el(panelId + "-hand-send");
   if (btnOpen)  btnOpen.addEventListener("click",  () => socket.emit("hand_open"));
   if (btnClose) btnClose.addEventListener("click", () => socket.emit("hand_close"));
   if (btnPinch) btnPinch.addEventListener("click", () => socket.emit("hand_pinch"));
-  if (btnSend)  btnSend.addEventListener("click",  () => {
-    const positions = FINGERS.map((_, i) => {
-      const inp = el(panelId + `-hand-f${i}`); return inp ? parseFloat(inp.value) : 0;
-    });
-    socket.emit("hand_set_fingers", { positions, speed_pct: 50 });
-  });
 }
 
 // ── Motor Panel ────────────────────────────────────────────────────────────────
@@ -1618,8 +1625,7 @@ socket.on("camera_reset_result", (data) => {
   });
 });
 
-socket.on("camera_device_list", (data) => {
-  const devices = data.devices || [];
+function _populateCameraDropdowns(devices) {
   PanelManager._panels.forEach((p, panelId) => {
     if (p.module !== "camera") return;
     const sel = el(panelId + "-cam-device");
@@ -1635,11 +1641,9 @@ socket.on("camera_device_list", (data) => {
       opt.textContent = label;
       sel.appendChild(opt);
     });
-    // Restore previous value
     if (currentVal && devices.some(d => d.id === currentVal)) {
       sel.value = currentVal;
     } else {
-      // Auto-select first active device
       const firstActive = devices.find(d => d.active);
       if (firstActive) {
         sel.value = firstActive.id;
@@ -1647,6 +1651,15 @@ socket.on("camera_device_list", (data) => {
       }
     }
   });
+}
+
+// Populate from embedded page data (no SocketIO needed, works for all roles)
+if (window.CAMERA_DEVICES && window.CAMERA_DEVICES.length > 0) {
+  _populateCameraDropdowns(window.CAMERA_DEVICES);
+}
+
+socket.on("camera_device_list", (data) => {
+  _populateCameraDropdowns(data.devices || []);
 });
 
 function _updateMotorState(panelId, s) {
@@ -1771,6 +1784,86 @@ socket.on("demo_status", (data) => {
   });
 });
 
+// ── Teleop Panel ──────────────────────────────────────────────────────────────
+
+function _renderTeleopPanel(panelId, body) {
+  const t = (k) => I18n.t(k);
+  body.innerHTML = `
+    <div class="status-row" style="font-size:13px;margin-bottom:10px">
+      <span>${t("teleop.xr_status")}<b id="${panelId}-tl-xr">—</b></span>
+      <span>${t("teleop.active")}<b id="${panelId}-tl-active">—</b></span>
+      <span>${t("teleop.tracking")}<b id="${panelId}-tl-tracking">—</b></span>
+      <span>${t("teleop.calibrated")}<b id="${panelId}-tl-calib">—</b></span>
+      <span id="${panelId}-tl-fault-badge" class="badge fault" style="display:none">FAULT</span>
+    </div>
+    <div style="font-size:12px;margin-bottom:8px">
+      <div><b>${t("teleop.position")}:</b> <span id="${panelId}-tl-pos">—</span></div>
+      <div style="margin-top:4px">
+        <b>${t("teleop.trigger")}:</b>
+        <progress id="${panelId}-tl-trigger" value="0" max="100" style="width:120px;height:14px"></progress>
+        <span id="${panelId}-tl-trigger-val" style="font-size:12px">0%</span>
+      </div>
+      <div style="margin-top:4px">
+        <b>Grip:</b><span class="dot" id="${panelId}-tl-grip" style="font-size:14px">⚪</span>
+        <b>A:</b><span class="dot" id="${panelId}-tl-a" style="font-size:14px">⚪</span>
+        <b>B:</b><span class="dot" id="${panelId}-tl-b" style="font-size:14px">⚪</span>
+      </div>
+    </div>
+    <div id="${panelId}-tl-joints" style="font-size:11px;margin-bottom:8px"></div>
+    <div class="btn-row" style="gap:4px">
+      <button class="btn-primary ctrl" id="${panelId}-tl-enable">${t("teleop.enable")}</button>
+      <button class="btn-warn ctrl"    id="${panelId}-tl-disable">${t("teleop.disable")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-tl-calibrate">${t("teleop.calibrate")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-tl-log">${t("teleop.toggle_log")}</button>
+    </div>
+  `;
+
+  const JOINT_NAMES = ["J1", "J2", "J3", "J4", "J5", "J6"];
+  const jGrid = el(panelId + "-tl-joints");
+  if (jGrid) {
+    JOINT_NAMES.forEach((name, i) => {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:2px";
+      row.innerHTML = `<label style="width:20px;font-weight:bold">${name}</label>
+        <span class="val" id="${panelId}-tl-j${i}-tgt" style="width:60px">—</span>
+        <span class="joint-actual" id="${panelId}-tl-j${i}-act" style="width:60px;color:var(--muted)">—</span>`;
+      jGrid.appendChild(row);
+    });
+  }
+
+  // Button events
+  el(panelId + "-tl-enable")?.addEventListener("click",    () => socket.emit("teleop_enable"));
+  el(panelId + "-tl-disable")?.addEventListener("click",   () => socket.emit("teleop_disable"));
+  el(panelId + "-tl-calibrate")?.addEventListener("click", () => socket.emit("teleop_calibrate"));
+  el(panelId + "-tl-log")?.addEventListener("click",       () => socket.emit("teleop_toggle_log"));
+}
+
+function _updateTeleopState(panelId, s) {
+  _maybeSet(el(panelId + "-tl-xr"), s.xr_initialized ? "OK" : "N/A");
+  _maybeSet(el(panelId + "-tl-active"), s.active ? I18n.t("teleop.active_yes") : I18n.t("teleop.active_no"));
+  _maybeSet(el(panelId + "-tl-tracking"), s.tracking ? I18n.t("teleop.tracking_yes") : I18n.t("teleop.tracking_no"));
+  _maybeSet(el(panelId + "-tl-calib"), s.calibrated ? I18n.t("teleop.calib_yes") : I18n.t("teleop.calib_no"));
+
+  const pos = s.controller_position;
+  _maybeSet(el(panelId + "-tl-pos"), pos ? `X:${fmt(pos[0],1)} Y:${fmt(pos[1],1)} Z:${fmt(pos[2],1)}` : "—");
+
+  const prog = el(panelId + "-tl-trigger");
+  const tval = el(panelId + "-tl-trigger-val");
+  if (prog) prog.value = Math.round((s.trigger_value || 0) * 100);
+  if (tval) tval.textContent = Math.round((s.trigger_value || 0) * 100) + "%";
+
+  const setDot = (e, active) => { if (e) e.textContent = active ? "🟢" : "⚪"; };
+  setDot(el(panelId + "-tl-grip"), s.grip_pressed);
+  setDot(el(panelId + "-tl-a"), s.button_a);
+  setDot(el(panelId + "-tl-b"), s.button_b);
+
+  const fb = el(panelId + "-tl-fault-badge");
+  if (fb) { fb.style.display = s.is_fault ? "inline-block" : "none"; if (s.is_fault && s.fault_text) fb.title = s.fault_text; }
+
+  if (s.target_joints_deg) s.target_joints_deg.forEach((a, i) => _maybeSet(el(panelId + `-tl-j${i}-tgt`), I18n.t("teleop.target") + fmt(a, 1) + "°"));
+  if (s.current_joints_deg) s.current_joints_deg.forEach((a, i) => _maybeSet(el(panelId + `-tl-j${i}-act`), I18n.t("teleop.actual") + fmt(a, 1) + "°"));
+}
+
 function _updateServoState(panelId, s) {
   _maybeSet(el(panelId + "-servo-connected"), s.connected ? I18n.t("servo.connected") : I18n.t("servo.mock"));
   const dirEl = el(panelId + "-servo-direction");
@@ -1888,6 +1981,10 @@ socket.on("robot_state", (s) => {
       case "demo":
         _updateDemoState(panelId, modState);
         PanelManager.updateStatus("demo", modState.active, false);
+        break;
+      case "teleop":
+        _updateTeleopState(panelId, modState);
+        PanelManager.updateStatus("teleop", modState.connected, modState.is_fault);
         break;
     }
   });
@@ -2049,12 +2146,24 @@ function _updateArmState(panelId, s) {
 function _updateHandState(panelId, s) {
   _maybeSet(el(panelId + "-hand-enabled"), s.is_enabled ? I18n.t("hand.enabled") : I18n.t("hand.disabled"));
   _maybeSet(el(panelId + "-hand-force"), fmt(s.grip_force_n, 1));
+  if (s.finger_limits) {
+    s.finger_limits.forEach((lim, i) => {
+      const sl = el(panelId + `-hand-f${i}`);
+      if (sl) {
+        sl.min = lim.min / 1000;
+        sl.max = lim.max / 1000;
+      }
+    });
+  }
   if (s.finger_positions) {
     s.finger_positions.forEach((pos, i) => {
       const sl = el(panelId + `-hand-f${i}`);
       const val = el(panelId + `-hand-f${i}-val`);
       if (sl && !sl.matches(":active")) sl.value = pos;
-      if (val) val.textContent = fmt(pos * 100, 0) + "%";
+      if (val) {
+        const maxPct = s.finger_limits ? Math.round(s.finger_limits[i].max / 10) : 100;
+        val.textContent = fmt(pos * 100, 0) + "%";
+      }
     });
   }
 }
@@ -2122,6 +2231,7 @@ if (btnEstop) {
     if (ACTIVE_MODULES.includes("servo")) socket.emit("servo_stop");
     if (ACTIVE_MODULES.includes("joint")) { socket.emit("joint_waist_stop"); socket.emit("joint_pt_stop"); }
     if (ACTIVE_MODULES.includes("drive")) socket.emit("drive_stop");
+    if (ACTIVE_MODULES.includes("teleop")) socket.emit("teleop_disable");
   });
 }
 

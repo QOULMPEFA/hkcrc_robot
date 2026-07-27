@@ -3,12 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Robot Control Panel</title>
+  <title data-i18n="header.page_title">具身智能机器人控制面板 | Embodied Intelligence Robot</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body data-role="{{ role }}">
   <header>
-    <h1>Robot Control Panel</h1>
+    <h1 data-i18n="header.panel_title">具身智能机器人控制面板</h1>
+    <span class="robot-type-badge" data-i18n="header.robot_type_tag">🦾 具身智能机器人</span>
+    <span class="hardware-summary" data-i18n="header.hardware_summary">UR5e 机械臂 + UGV 底盘 + 灵巧手 + 升降平台</span>
     <div id="conn-badge" class="badge disconnected" data-i18n="header.disconnected">未连接</div>
 
     <!-- Layout selector -->

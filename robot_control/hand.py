@@ -7,6 +7,7 @@ unreachable.
 SocketIO events: hand_open, hand_close, hand_pinch, hand_set_fingers
 """
 
+import asyncio
 import logging
 import threading
 import time
@@ -59,6 +60,10 @@ class HandController(RobotModule):
         # CAN config (SocketCAN 2.0)
         self._can_iface = cfg.get("can_iface", "can0")
         self._master_id = int(cfg.get("master_id", 1))
+        # candleLight USB-CAN FD config
+        self._candlelight_channel = int(cfg.get("candlelight_channel", 0))
+        self._candlelight_bitrate = int(cfg.get("candlelight_bitrate", 1_000_000))
+        self._candlelight_data_bitrate = int(cfg.get("candlelight_data_bitrate", 5_000_000))
         # Shared
         self._slave_id = int(cfg.get("slave_id", 0x02))
         # SocketCAN function references (set during _connect_can)
@@ -73,6 +78,7 @@ class HandController(RobotModule):
         self._finger_positions: List[float] = [0.0] * 6
         self._finger_speeds: List[float] = [0.0] * 6
         self._finger_currents: List[float] = [0.0] * 6
+        self._finger_limits: List[Dict[str, int]] = [{"min": 0, "max": 1000}] * 6
 
         self._lock = threading.Lock()
         self._loop_thread: Optional[threading.Thread] = None
@@ -82,6 +88,7 @@ class HandController(RobotModule):
         # Command queue for thread-safe async submission.
         self._cmd_queue: Optional[Any] = None  # asyncio.Queue, set after loop init
         self._task: Optional[Any] = None
+        self._state_count: int = 0  # periodic log counter
 
         log.info("[Hand] Controller created — protocol=%s port=%s",
                  self._protocol, self._port or "auto")
@@ -101,6 +108,7 @@ class HandController(RobotModule):
             "finger_positions": [0.0] * 6,
             "finger_speeds": [0.0] * 6,
             "finger_currents": [0.0] * 6,
+            "finger_limits": [{"min": 0, "max": 1000}] * 6,
             "connected": False,
             "is_enabled": False,
             "is_fault": False,
@@ -185,10 +193,20 @@ class HandController(RobotModule):
 
     def get_state(self) -> Dict[str, Any]:
         with self._lock:
+            self._state_count += 1
+            if self._state_count % 25 == 0:   # every ~5 s
+                pos_pct = [round(p * 100) for p in self._finger_positions]
+                currents = list(self._finger_currents)
+                log.info("[Hand] running — positions(%%): %s, currents(mA): %s, connected=%s, fault=%s",
+                         pos_pct, currents, self._connected, self._fault)
+            # grip force: sum of motor currents (mA) → approximate N
+            grip_n = sum(self._finger_currents) / 1000.0 if self._finger_currents else 0.0
             return {
                 "finger_positions": list(self._finger_positions),
                 "finger_speeds": list(self._finger_speeds),
                 "finger_currents": list(self._finger_currents),
+                "finger_limits": list(self._finger_limits),
+                "grip_force_n": round(grip_n, 1),
                 "connected": self._connected,
                 "is_enabled": self._enabled,
                 "is_fault": self._fault,
@@ -258,6 +276,8 @@ class HandController(RobotModule):
         try:
             if self._protocol == "can":
                 await self._connect_can()
+            elif self._protocol == "can_candlelight":
+                await self._connect_candlelight()
             else:
                 await self._connect_modbus()
 
@@ -270,8 +290,11 @@ class HandController(RobotModule):
                     log.debug("[Hand] set_finger_unit_mode skipped: %s", _mode_exc)
                 # Read initial state.
                 await self._read_motor_status()
+                await self._read_finger_limits()
                 log.info("[Hand] Connected — protocol=%s, slave_id=0x%02X",
                          self._protocol, self._slave_id)
+                log.info("[Hand] Finger limits: %s",
+                         [f"{l['min']}-{l['max']}" for l in self._finger_limits])
         except Exception as exc:
             log.warning("[Hand] Connection failed: %s — will retry", exc)
             # Clean up partial state before retry.
@@ -351,6 +374,49 @@ class HandController(RobotModule):
 
         self._connected = True
 
+    async def _connect_candlelight(self) -> None:
+        """Connect via candleLight USB-CAN FD adapter (Windows/Linux)."""
+        import sys as _sys, os as _os
+
+        _sdk_path = _os.path.join(_os.path.dirname(__file__), "..",
+                                   "hand_brainco_sdk", "python")
+        _sdk_path = _os.path.normpath(_sdk_path)
+        if _sdk_path not in _sys.path:
+            _sys.path.insert(0, _sdk_path)
+
+        from candlelight_can import candlelight_open as _cl_open, \
+            candlelight_close as _cl_close, \
+            candlelight_send_message as _cl_send, \
+            candlelight_receive_canfd_filtered as _cl_recv
+
+        _LIBSTARK.init_logging()
+
+        self._can_send_fn = _cl_send
+        self._can_recv_fn = _cl_recv
+        self._can_close_fn = _cl_close
+
+        # 1. Create device handler using CANFD protocol type
+        self._client = _LIBSTARK.init_device_handler(
+            _LIBSTARK.StarkProtocolType.CanFd, self._master_id)
+
+        # 2. Open candleLight AFTER init_device_handler
+        _cl_open(
+            channel=self._candlelight_channel,
+            bitrate=self._candlelight_bitrate,
+            data_bitrate=self._candlelight_data_bitrate,
+            fd=True,
+        )
+
+        # 3. Register TX/RX callbacks
+        _LIBSTARK.set_can_tx_callback(self._can_tx_callback)
+        _LIBSTARK.set_can_rx_callback(self._can_rx_callback)
+
+        # 4. Query device info
+        info = await self._client.get_device_info(self._slave_id)
+        log.info("[Hand] Device: %s", info.description if info else "?")
+
+        self._connected = True
+
     # ── CAN TX/RX callbacks (called from SDK internals) ───────────────────
 
     def _can_tx_callback(self, _slave_id: int, can_id: int,
@@ -380,7 +446,7 @@ class HandController(RobotModule):
     async def _disconnect(self) -> None:
         if self._client:
             try:
-                if self._protocol == "can":
+                if self._protocol in ("can", "can_candlelight"):
                     _LIBSTARK.close_device_handler(self._client)
                     if self._can_close_fn:
                         self._can_close_fn()
@@ -404,20 +470,29 @@ class HandController(RobotModule):
         try:
             if cmd == "set_finger":
                 idx, pos, spd = args
-                target = max(0, min(1000, int(pos * 1000)))
-                positions = list(self._finger_positions)
-                positions[idx] = target
+                limit = self._finger_limits[idx]
+                target = max(limit["min"], min(limit["max"], int(pos * 1000)))
+                with self._lock:
+                    current = [int(p * 1000) for p in self._finger_positions]
+                    current[idx] = target
                 if self._protocol == "can":
                     await self._client.set_finger_positions(
-                        self._slave_id, positions)
+                        self._slave_id, current)
                 else:
                     speed = max(0, min(1000, int(spd * 10)))
                     await self._client.set_finger_positions_and_speeds(
-                        self._slave_id, positions, [speed] * 6)
+                        self._slave_id, current, [speed] * 6)
+                # Update displayed positions immediately
+                with self._lock:
+                    self._finger_positions = [p / 1000.0 for p in current]
 
             elif cmd == "set_all":
                 positions, spd = args
-                targets = [max(0, min(1000, int(p * 1000))) for p in positions]
+                targets = [
+                    max(self._finger_limits[i]["min"],
+                        min(self._finger_limits[i]["max"], int(p * 1000)))
+                    for i, p in enumerate(positions)
+                ]
                 if self._protocol == "can":
                     await self._client.set_finger_positions(
                         self._slave_id, targets)
@@ -425,10 +500,12 @@ class HandController(RobotModule):
                     speed = max(0, min(1000, int(spd * 10)))
                     await self._client.set_finger_positions_and_speeds(
                         self._slave_id, targets, [speed] * 6)
+                # Update displayed positions immediately
+                with self._lock:
+                    self._finger_positions = [p / 1000.0 for p in targets]
 
             elif cmd == "stop":
                 if self._protocol == "can":
-                    # Hold current position (de-facto stop on CAN 2.0)
                     cur = [int(p * 1000) for p in self._finger_positions]
                     await self._client.set_finger_positions(
                         self._slave_id, cur)
@@ -443,23 +520,62 @@ class HandController(RobotModule):
 
     async def _status_poller(self) -> None:
         """Periodically read motor status (every 200ms)."""
-        while self._running:
-            if self._connected and self._client:
-                await self._read_motor_status()
-            await asyncio.sleep(0.2)
+        n = 0
+        log.info("[Hand] Status poller started")
+        try:
+            while self._running:
+                n += 1
+                if n % 5 == 0:   # every ~1 s
+                    with self._lock:
+                        pos_pct = [round(p * 100) for p in self._finger_positions]
+                    log.info("[Hand] running — positions(%%): %s, fault=%s",
+                             pos_pct, self._fault)
+                if self._connected and self._client:
+                    await self._read_motor_status()
+                await asyncio.sleep(0.2)
+        except Exception as exc:
+            log.error("[Hand] Status poller crashed: %s", exc, exc_info=True)
 
     async def _read_motor_status(self) -> None:
         try:
             status = await self._client.get_motor_status(self._slave_id)
             with self._lock:
-                # positions are in per-mil (0-1000), convert to 0-1
                 self._finger_positions = [p / 1000.0 for p in status.positions]
                 self._finger_speeds = list(status.speeds)
                 self._finger_currents = list(status.currents)
                 self._fault = False
         except Exception as exc:
-            log.debug("[Hand] Status read error: %s", exc)
+            log.warning("[Hand] Status read error: %s", exc)
             self._fault = True
+
+    async def _read_finger_limits(self) -> None:
+        """Read per-finger min/max position limits from device (Revo2 only)."""
+        finger_ids = [
+            _LIBSTARK.FingerId.Thumb,
+            _LIBSTARK.FingerId.ThumbAux,
+            _LIBSTARK.FingerId.Index,
+            _LIBSTARK.FingerId.Middle,
+            _LIBSTARK.FingerId.Ring,
+            _LIBSTARK.FingerId.Pinky,
+        ]
+        try:
+            settings = await self._client.get_all_finger_settings(self._slave_id)
+            with self._lock:
+                for i, s in enumerate(settings):
+                    self._finger_limits[i] = {"min": s.min_position, "max": s.max_position}
+        except Exception:
+            # Fallback: read one by one
+            try:
+                for i, fid in enumerate(finger_ids):
+                    try:
+                        min_p = await self._client.get_finger_min_position(self._slave_id, fid)
+                        max_p = await self._client.get_finger_max_position(self._slave_id, fid)
+                        with self._lock:
+                            self._finger_limits[i] = {"min": min_p, "max": max_p}
+                    except Exception:
+                        pass
+            except Exception:
+                log.warning("[Hand] Could not read finger limits — using defaults")
 
     async def _stop_all_motors(self) -> None:
         if self._client:

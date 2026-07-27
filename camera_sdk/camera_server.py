@@ -5,7 +5,7 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 FFMPEG = "C:/ProgramData/chocolatey/bin/ffmpeg.exe"
-SOURCE = "tcp://frp-fit.com:35230"
+SOURCE = "tcp://frp-fit.com:35000"
 PORT = 6000
 
 

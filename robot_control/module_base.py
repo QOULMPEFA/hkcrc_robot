@@ -7,7 +7,7 @@ module's metadata to dynamically register SocketIO handlers and render controls.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -19,6 +19,10 @@ EventHandler = Callable[[dict, EmitFn], None]
 
 class RobotModule(ABC):
     """Base class that every hardware module must implement."""
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None, robot=None):
+        self.config = config or {}
+        self.robot = robot  # Optional reference to Robot instance for cross-module access
 
     # ── metadata ────────────────────────────────────────────────────────────
 

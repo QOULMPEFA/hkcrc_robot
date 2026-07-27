@@ -253,11 +253,15 @@ class CameraModule(RobotModule):
             self._next_cid = cid + 1
             with self._cond:
                 self._client_seq[cid] = self._frame_seq
+            log.info("[Camera:%s] client #%d subscribed (total=%d)",
+                     self._id, cid, len(self._client_seq))
             return cid
 
         def unsubscribe(self, cid: int) -> None:
             with self._cond:
                 self._client_seq.pop(cid, None)
+            log.info("[Camera:%s] client #%d unsubscribed (total=%d)",
+                     self._id, cid, len(self._client_seq))
 
         def wait_frame(self, cid: int, timeout: float = 5.0) -> Tuple[Optional[bytes], int]:
             with self._cond:

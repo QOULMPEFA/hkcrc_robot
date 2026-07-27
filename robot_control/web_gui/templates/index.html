@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Robot Control Panel</title>
+  <title data-i18n="header.page_title">机器人控制面板 | Robot Control Panel</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body data-role="{{ role }}">
   <header>
-    <h1>Robot Control Panel</h1>
+    <h1 data-i18n="header.panel_title">机器人控制面板</h1>
+    <span class="robot-type-badge" data-i18n="header.robot_type_tag">机器人</span>
     <div id="conn-badge" class="badge disconnected" data-i18n="header.disconnected">未连接</div>
 
     <!-- Layout selector -->
@@ -168,8 +169,10 @@
     </div>
   </div>
 
+  <script>window.CAMERA_DEVICES = {{ camera_devices | safe }};</script>
+  <script>window.STREAM_TOKEN = "{{ stream_token }}";</script>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-  <script src="/static/i18n.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/i18n.js?v=3"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>

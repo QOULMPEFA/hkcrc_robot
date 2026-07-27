@@ -1,1 +1,1 @@
-在 log/cclog 目录下新建 Markdown 更新日志。文件名格式：YYYYMMDDHHMMSS.md
+在 log/cclog 目录下新建 Markdown 更新/对话日志。文件名格式：YYYYMMDDHHMMSS.md
