@@ -68,6 +68,7 @@ class ArmController(RobotModule):
         self._state_thread: Optional[threading.Thread] = None
         self._logs: list[ArmLogEntry] = []
         self._collision_enabled = True
+        self._joints_initialized = False
         self._payload_mass = float(cfg.get("payload_mass", 0.5))
         self._payload_cog = [float(x) for x in cfg.get("payload_cog", [0.0, 0.0, 0.05])]
 
@@ -387,11 +388,15 @@ class ArmController(RobotModule):
         T_motor = [vals[2 + j * 8 + 5] for j in range(6)]    # floats: C
         joint_modes = [vals[2 + j * 8 + 7] for j in range(6)]  # uint8
 
+        actual = [math.degrees(v) for v in q_actual]
         with self._lock:
-            self._state.joint_actual_deg = [math.degrees(v) for v in q_actual]
+            self._state.joint_actual_deg = actual
             self._state.joint_currents_a = list(I_actual)
             self._state.joint_temps_c = list(T_motor)
             self._state.joint_voltages_v = list(V_actual)
+            if not self._joints_initialized:
+                self._state.joint_angles_deg = list(actual)
+                self._joints_initialized = True
             self._state.is_moving = any(abs(joint_modes[j]) > 1 for j in range(6))
             self._check_collision()
 
@@ -542,6 +547,7 @@ class ArmController(RobotModule):
                     self._state.connected = False
                     self._dash_sock = None
                     self._ur_sock = None
+                    self._joints_initialized = False
                 for s in (dash_sock, ur_sock):
                     if s:
                         try:
