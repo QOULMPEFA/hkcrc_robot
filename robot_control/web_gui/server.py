@@ -503,7 +503,7 @@ def main():
     #
     # ── Jetson AGX Orin (full embodied intelligence robot) — active ─────
     config = {
-        "arm":    {"host": "192.168.56.101"},
+        "arm":    {"host": "192.168.56.101", "payload_mass": 0.5, "payload_cog": [0.0, 0.0, 0.05]},
         "ugv":    {"host": "127.0.0.1", "port": 9100},
         "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
         "camera": {"devices": ["/dev/video6", "/dev/video4"]},

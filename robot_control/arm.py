@@ -68,6 +68,8 @@ class ArmController(RobotModule):
         self._state_thread: Optional[threading.Thread] = None
         self._logs: list[ArmLogEntry] = []
         self._collision_enabled = True
+        self._payload_mass = float(cfg.get("payload_mass", 0.5))
+        self._payload_cog = [float(x) for x in cfg.get("payload_cog", [0.0, 0.0, 0.05])]
 
     # ── RobotModule metadata ───────────────────────────────────────────────
 
@@ -525,6 +527,12 @@ class ArmController(RobotModule):
                     self._state.connected = True
                 log.info("[Arm] Connected to UR5e (%s)", self._host)
                 self._add_log("info", f"已连接 ({self._host})")
+                # Set payload so UR5 dynamics model accounts for end-effector mass
+                m, cx, cy, cz = self._payload_mass, *self._payload_cog
+                self._send_urscript(
+                    f"set_payload({m:.3f}, [{cx:.4f}, {cy:.4f}, {cz:.4f}])")
+                log.info("[Arm] set_payload(%.3f kg, CoG=[%.3f, %.3f, %.3f])",
+                         m, cx, cy, cz)
                 self._send_urscript("set_collision_detection(True)")
                 self._poll_loop(dash_sock)
             except (OSError, ConnectionRefusedError) as e:
