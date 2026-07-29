@@ -67,6 +67,7 @@ HEAD_TRACK_HZ = 20.0              # head→gimbal update rate
 HEAD_GIMBAL_DEADBAND = 0.3        # degrees; default deadband (adjustable via GUI)
 HEAD_EMA_ALPHA = 0.25             # EMA smoothing default (adjustable via GUI)
 HEAD_RATE_LIMIT = 300.0           # deg/s; max gimbal target velocity (adjustable via GUI)
+HEAD_DEADZONE = 3.0              # degrees; hysteresis dead zone (only move when head exceeds this)
 
 
 def _quat_to_yaw_pitch(qx: float, qy: float, qz: float, qw: float) -> tuple:
@@ -116,6 +117,7 @@ class TeleopModule(RobotModule):
         self._head_smoothing = cfg.get("head_smoothing", HEAD_EMA_ALPHA)
         self._head_deadband = float(cfg.get("head_deadband", HEAD_GIMBAL_DEADBAND))
         self._head_rate_limit = float(cfg.get("head_rate_limit", HEAD_RATE_LIMIT))
+        self._head_deadzone = float(cfg.get("head_deadzone", HEAD_DEADZONE))
         self._head_yaw_gain = float(cfg.get("head_yaw_gain", 1.0))
         self._head_pitch_gain = float(cfg.get("head_pitch_gain", 1.0))
         # Optional gimbal limit overrides (None = use gimbal module defaults)
@@ -159,6 +161,8 @@ class TeleopModule(RobotModule):
         self._ema_initialized = False
         self._gimbal_target_yaw = 0.0
         self._gimbal_target_pitch = 0.0
+        self._head_dz_yaw = 0.0       # dead zone reference (head angle at last gimbal update)
+        self._head_dz_pitch = 0.0
         self._head_pose_available = False
         self._last_head_track = 0.0
 
@@ -215,6 +219,7 @@ class TeleopModule(RobotModule):
             "head_deadband": HEAD_GIMBAL_DEADBAND,
             "head_smoothing": HEAD_EMA_ALPHA,
             "head_rate_limit": HEAD_RATE_LIMIT,
+            "head_deadzone": HEAD_DEADZONE,
             "gimbal_yaw_limits": [-90, 90],
             "gimbal_pitch_limits": [-90, 60],
         }
@@ -248,6 +253,7 @@ class TeleopModule(RobotModule):
                 "head_deadband": self._head_deadband,
                 "head_smoothing": self._head_smoothing,
                 "head_rate_limit": self._head_rate_limit,
+                "head_deadzone": self._head_deadzone,
                 "gimbal_yaw_limits": list(self._effective_yaw_limits()),
                 "gimbal_pitch_limits": list(self._effective_pitch_limits()),
             }
@@ -406,9 +412,11 @@ class TeleopModule(RobotModule):
             return
         with self._lock:
             self._gimbal_tracking = True
-            # Reset deadband targets so the first step always moves the gimbal
+            # Reset deadband/deadzone targets so the first step always moves the gimbal
             self._gimbal_target_yaw = float('inf')
             self._gimbal_target_pitch = float('inf')
+            self._head_dz_yaw = float('inf')
+            self._head_dz_pitch = float('inf')
             # Reset EMA filter to avoid stale values from previous session
             self._ema_initialized = False
         log.info("[Teleop] Gimbal head tracking enabled")
@@ -498,13 +506,16 @@ class TeleopModule(RobotModule):
                 self._head_smoothing = max(0.02, min(1.0, float(data["smoothing"])))
             if "rate_limit" in data:
                 self._head_rate_limit = max(5.0, min(500.0, float(data["rate_limit"])))
-        log.info("[Teleop] Head config: deadband=%.2f° smoothing=%.2f rate=%.0f°/s",
-                 self._head_deadband, self._head_smoothing, self._head_rate_limit)
+            if "deadzone" in data:
+                self._head_deadzone = max(0.5, min(15.0, float(data["deadzone"])))
+        log.info("[Teleop] Head config: deadzone=%.1f° deadband=%.2f° smooth=%.2f rate=%.0f°/s",
+                 self._head_deadzone, self._head_deadband, self._head_smoothing, self._head_rate_limit)
         if emit:
             emit("head_config_updated", {
                 "head_deadband": self._head_deadband,
                 "head_smoothing": self._head_smoothing,
                 "head_rate_limit": self._head_rate_limit,
+                "head_deadzone": self._head_deadzone,
             })
 
     # ── head tracking ──────────────────────────────────────────────────────
@@ -556,17 +567,26 @@ class TeleopModule(RobotModule):
         if gimbal is None:
             return
 
+        # Hysteresis dead zone: only move gimbal when head has moved enough
+        # from the last position where gimbal was updated.
+        # Skip on first step after enable (dz ref reset to inf).
+        if math.isfinite(self._head_dz_yaw):
+            head_dyaw = abs(self._ema_yaw - self._head_dz_yaw)
+            head_dpitch = abs(self._ema_pitch - self._head_dz_pitch)
+            if head_dyaw < self._head_deadzone and head_dpitch < self._head_deadzone:
+                return  # head hasn't moved enough — gimbal stays frozen
+
         target_yaw, target_pitch = self._head_to_gimbal(self._ema_yaw, self._ema_pitch)
         if target_yaw is None:
             return
 
         # Deadband: skip if change is below threshold (suppresses IMU jitter)
-        if (abs(target_yaw - self._gimbal_target_yaw) < self._head_deadband and
-                abs(target_pitch - self._gimbal_target_pitch) < self._head_deadband):
-            return
+        if math.isfinite(self._gimbal_target_yaw):
+            if (abs(target_yaw - self._gimbal_target_yaw) < self._head_deadband and
+                    abs(target_pitch - self._gimbal_target_pitch) < self._head_deadband):
+                return
 
         # Rate limit: cap velocity to suppress rapid fluctuations
-        # Skip on first step after enable (target reset to inf)
         if math.isfinite(self._gimbal_target_yaw):
             max_step = self._head_rate_limit / HEAD_TRACK_HZ
             dyaw = target_yaw - self._gimbal_target_yaw
@@ -576,6 +596,9 @@ class TeleopModule(RobotModule):
             if abs(dpitch) > max_step:
                 target_pitch = self._gimbal_target_pitch + math.copysign(max_step, dpitch)
 
+        # Update gimbal AND reset dead zone reference to current head angle
+        self._head_dz_yaw = self._ema_yaw
+        self._head_dz_pitch = self._ema_pitch
         self._gimbal_target_yaw = target_yaw
         self._gimbal_target_pitch = target_pitch
         gimbal.move_to(target_yaw, target_pitch)

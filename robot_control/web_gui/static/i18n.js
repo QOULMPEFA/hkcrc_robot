@@ -247,6 +247,7 @@ I18n.zh["teleop.gimbal_limits"]     = "限位";
 I18n.zh["teleop.gimbal_deadband"]  = "死区";
 I18n.zh["teleop.gimbal_smoothing"] = "平滑";
 I18n.zh["teleop.gimbal_rate_limit"] = "速率限制";
+I18n.zh["teleop.gimbal_deadzone"]   = "死区阈值";
 I18n.zh["teleop.gimbal_apply_config"] = "应用";
 
 I18n.en["teleop.gimbal_section"]      = "Head Tracking (Gimbal)";
@@ -267,6 +268,7 @@ I18n.en["teleop.gimbal_limits"]     = "Limits";
 I18n.en["teleop.gimbal_deadband"]  = "Deadband";
 I18n.en["teleop.gimbal_smoothing"] = "Smoothing";
 I18n.en["teleop.gimbal_rate_limit"] = "Rate Limit";
+I18n.en["teleop.gimbal_deadzone"]   = "Dead Zone";
 I18n.en["teleop.gimbal_apply_config"] = "Apply";
 
 /* === camera panel === */
