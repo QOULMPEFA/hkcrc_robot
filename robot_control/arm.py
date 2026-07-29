@@ -457,7 +457,7 @@ class ArmController(RobotModule):
         temps = self._state.joint_temps_c
         sensitivity = self._state.collision_sensitivity
         # Conservative per-joint current thresholds (A) — lower sensitivity = higher threshold
-        base_thresholds = [8.0, 12.0, 8.0, 4.0, 2.0, 2.0]
+        base_thresholds = [14.0, 18.0, 12.0, 6.0, 3.0, 3.0]
         # sensitivity 1.0 → threshold halved (very sensitive); 0.1 → threshold doubled (lenient)
         scale = 1.5 - sensitivity * 0.5  # 1.0 at sens=1.0, 1.45 at sens=0.1
         warning = ""
@@ -577,8 +577,9 @@ class ArmController(RobotModule):
                 self._add_log("info", f"已连接 ({self._host})")
                 # Apply gravity compensation and payload for UR5 dynamics
                 self._apply_ur5_model()
-                # Apply default collision sensitivity on connect
-                self._send_urscript("set_collision_detection(True)")
+                # Hardware collision detection stays OFF by default for tilted mounts;
+                # software current monitoring (_check_collision) provides the safety net.
+                self._send_urscript("set_collision_detection(False)")
                 self._poll_loop(dash_sock)
             except (OSError, ConnectionRefusedError) as e:
                 log.debug("[Arm] Connection failed: %s", e)
