@@ -489,6 +489,16 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   flex: 1;
   min-width: 80px;
 }
+.arm-joint-row input[type="number"] {
+  width: 52px;
+  padding: 1px 3px;
+  font-size: 11px;
+  text-align: center;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 3px;
+}
 .arm-joint-row .val {
   width: 38px;
   font-size: 11px;

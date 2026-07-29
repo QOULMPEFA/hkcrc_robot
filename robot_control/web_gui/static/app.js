@@ -1114,6 +1114,7 @@ function _renderArmPanel(panelId, body) {
         <label>${name}</label>
         <button class="dpad-btn" style="width:28px;height:28px;font-size:14px;margin-right:2px" data-j="${i}" data-d="-5">◀</button>
         <input type="range" id="${panelId}-arm-j${i}" min="-180" max="180" step="1" value="0" />
+        <input type="number" id="${panelId}-arm-j${i}-num" class="joint-num" min="-180" max="180" step="1" value="0" />
         <button class="dpad-btn" style="width:28px;height:28px;font-size:14px;margin-left:2px" data-j="${i}" data-d="5">▶</button>
         <span class="val" id="${panelId}-arm-j${i}-val">0.0°</span>
         <span class="joint-actual" id="${panelId}-arm-j${i}-act">${t("arm.actual_prefix")}—</span>
@@ -1122,12 +1123,23 @@ function _renderArmPanel(panelId, body) {
       `;
       armGrid.appendChild(row);
 
-      const slider = row.querySelector("input");
+      const slider = row.querySelector("input[type=range]");
+      const numInp = row.querySelector("input[type=number]");
       slider.addEventListener("input", (e) => {
+        const v = parseFloat(e.target.value);
         const valEl = el(panelId + `-arm-j${i}-val`);
-        if (valEl) valEl.textContent = parseFloat(e.target.value).toFixed(1) + "°";
+        if (valEl) valEl.textContent = v.toFixed(1) + "°";
+        if (numInp) numInp.value = v;
       });
       slider.addEventListener("change", () => _sendCurrentAngles());
+      if (numInp) {
+        numInp.addEventListener("input", () => {
+          const v = parseFloat(numInp.value) || 0;
+          slider.value = Math.max(-180, Math.min(180, v));
+          slider.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        numInp.addEventListener("change", () => _sendCurrentAngles());
+      }
 
       row.querySelectorAll("button").forEach(btn => {
         let interval = null;
@@ -2332,12 +2344,14 @@ function _updateArmState(panelId, s) {
     }
   }
 
-  // Commanded joint angles (update sliders)
+  // Commanded joint angles (update sliders + number inputs)
   if (s.joint_angles_deg) {
     s.joint_angles_deg.forEach((angle, i) => {
       const sl = el(panelId + `-arm-j${i}`);
+      const num = el(panelId + `-arm-j${i}-num`);
       const val = el(panelId + `-arm-j${i}-val`);
       if (sl && !sl.matches(":active")) sl.value = angle;
+      if (num && document.activeElement !== num) num.value = angle;
       if (val) val.textContent = fmt(angle, 1) + "°";
     });
   }
