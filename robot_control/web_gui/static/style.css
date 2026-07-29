@@ -512,6 +512,10 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   min-width: 44px;
   text-align: right;
 }
+.joint-confirm-row {
+  text-align: right;
+  margin: 4px 0;
+}
 
 /* ── servo joint ───────────────────────────────────────────────────────────── */
 .joint-section {

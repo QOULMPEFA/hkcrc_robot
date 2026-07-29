@@ -456,6 +456,7 @@ I18n.zh["arm.fault"]           = "FAULT";
 I18n.zh["arm.log_label"]       = "运行日志";
 I18n.zh["arm.log_toggle"]      = "运行日志 ▾";
 I18n.zh["arm.actual_prefix"]   = "实 ";
+I18n.zh["arm.exec"]            = "执行";
 
 I18n.en["arm.connection"]      = "Connection:";
 I18n.en["arm.enabled"]         = "Enabled:";
@@ -479,6 +480,7 @@ I18n.en["arm.fault"]           = "FAULT";
 I18n.en["arm.log_label"]       = "Log";
 I18n.en["arm.log_toggle"]      = "Log ▾";
 I18n.en["arm.actual_prefix"]   = "Act ";
+I18n.en["arm.exec"]            = "Execute";
 
 /* === hand panel === */
 I18n.zh["hand.status"]       = "状态：";

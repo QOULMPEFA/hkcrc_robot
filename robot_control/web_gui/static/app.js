@@ -1082,6 +1082,9 @@ function _renderArmPanel(panelId, body) {
     </div>
     <div id="${panelId}-arm-collision-warn" class="collision-warn" style="display:none"></div>
     <div class="joint-grid" id="${panelId}-arm-joints"></div>
+    <div class="joint-confirm-row">
+      <button class="btn-primary" id="${panelId}-arm-exec">${t("arm.exec")}</button>
+    </div>
     <div class="btn-row">
       <button class="btn-primary ctrl"   id="${panelId}-arm-enable" data-bind-action="arm.enable">${t("arm.enable")}</button>
       <button class="btn-secondary ctrl" id="${panelId}-arm-disable" data-bind-action="arm.disable">${t("arm.disable")}</button>
@@ -1138,7 +1141,6 @@ function _renderArmPanel(panelId, body) {
           slider.value = Math.max(-180, Math.min(180, v));
           slider.dispatchEvent(new Event("input", { bubbles: true }));
         });
-        numInp.addEventListener("change", () => _sendCurrentAngles());
       }
 
       row.querySelectorAll("button").forEach(btn => {
@@ -1166,6 +1168,8 @@ function _renderArmPanel(panelId, body) {
       });
     });
   }
+
+  el(panelId + "-arm-exec")?.addEventListener("click", () => _sendCurrentAngles());
 
   if (slSpeed) {
     slSpeed.addEventListener("input", () => {
