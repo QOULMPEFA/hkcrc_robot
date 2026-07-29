@@ -35,7 +35,8 @@ _MODULE_REGISTRY: Dict[str, tuple] = {
     "joint":  ("robot_control.pipi_joint",  "JointModule"),
     "drive":  ("robot_control.pipi_drive",  "DriveModule"),
     "demo":   ("robot_control.demo",        "DemoModule"),
-    "teleop": ("robot_control.teleop",      "TeleopModule"),
+    "teleop": ("teleoperation_sdk.teleop",   "TeleopModule"),
+    "gimbal": ("robot_control.gimbal",      "GimbalModule"),
 }
 
 
@@ -107,7 +108,11 @@ class Robot:
 
             instance = _instantiate_module(name, mod_cfg if isinstance(mod_cfg, dict) else {})
             if instance is not None:
-                instance.robot = self  # wire cross-module access
+                # WARNING: wire cross-module access via post-hoc assignment.
+                # Do NOT pass robot= to cls(config, robot=self) — most module
+                # constructors (lift/camera/motor/hand/arm/ugv) don't accept
+                # a 'robot' kwarg and will raise TypeError.
+                instance.robot = self
             if instance is None:
                 # Still record state schema so GUI doesn't break
                 try:

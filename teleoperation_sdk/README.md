@@ -7,13 +7,26 @@ Meta Quest 3 (OpenXR Unity App)
        │ WiFi (same LAN)
        ▼
 Jetson AGX Orin
-  ├─ XRoboToolkit-PC-Service (C++)   ← receives controller poses
+  ├─ XRoboToolkit-PC-Service (C++)   ← receives controller + head poses
   ├─ xrobotoolkit_sdk (pybind11)      ← Python bindings
-  └─ robot_control/teleop.py          ← TeleopModule (servoj + hand)
-              │                    │
-              ▼                    ▼
-     UR5 arm (TCP 30001)   BrainCo Hand (Modbus)
+  └─ teleoperation_sdk/teleop.py     ← TeleopModule
+              │          │            │
+              ▼          ▼            ▼
+     UR5 arm (TCP)  BrainCo Hand  Gimbal Camera
+                   (Modbus)       (CH340 UART Servos)
 ```
+
+### Head Tracking → Gimbal
+
+The Quest 3 HMD orientation drives the 2-axis gimbal camera:
+
+```
+HMD quaternion → yaw/pitch extraction → calibration offset
+→ clamp to gimbal limits → gimbal.move_to(yaw, pitch) at 5 Hz
+```
+
+Gimbal tracking runs independently from arm tracking — you can use head→gimbal
+without enabling arm teleop, or combine both for full FPV immersion.
 
 ## Quest 3 Compatibility
 
@@ -88,6 +101,19 @@ In `robot_control/web_gui/server.py`, the teleop module config:
     "arm_controller": "right",      # which Quest controller drives the arm
     "workspace_min_xyz": [-500, -500, 0],
     "workspace_max_xyz": [500, 500, 850],
+    # Head tracking → gimbal
+    "head_to_gimbal": True,         # enable head→gimbal by default
+    "head_yaw_sign": 1,             # 1 or -1 to flip yaw direction
+    "head_pitch_sign": 1,           # 1 or -1 to flip pitch direction
+}
+```
+
+The gimbal module must also be enabled:
+```python
+"gimbal": {
+    "yaw_limits": [-90, 90],
+    "pitch_limits": [-90, 60],
+    "servo_ids": {"yaw": 0, "pitch": 1},
 }
 ```
 
@@ -103,16 +129,18 @@ In `robot_control/web_gui/server.py`, the teleop module config:
 ## Directory Map
 
 ```
-teleoperation_sdk/          ← this directory
+teleoperation_sdk/          ← this directory (portable — copy to any project)
   README.md                 ← this file
-  setup_xr_teleop.sh        → ../scripts/setup_xr_teleop.sh
-
-robot_control/
-  teleop.py                 ← TeleopModule (RobotModule interface)
+  __init__.py               ← package init, public API exports
+  teleop.py                 ← TeleopModule (RobotModule) — XR + arm + hand + gimbal
   ur5_ik.py                 ← UR5 numerical IK (damped least-squares Jacobian)
+  setup_xr_teleop.sh        ← build script for Jetson ARM64
+
+robot_control/              ← robot framework (not part of this SDK)
+  module_base.py            ← RobotModule ABC
+  robot.py                  ← module registry → ("teleoperation_sdk.teleop", "TeleopModule")
   arm.py                    ← teleop gating on move_joints/move_cartesian/go_home
-  module_base.py            ← RobotModule ABC with robot cross-reference
-  robot.py                  ← module registry + wiring
+  gimbal.py                 ← GimbalModule (2-axis servo gimbal)
 ```
 
 ## Alternative: Direct OpenXR Streaming

@@ -1,4 +1,4 @@
-"""XR teleoperation module — Meta Quest 3 headset → UR5 arm + BrainCo hand.
+"""XR teleoperation module — Meta Quest 3 headset → UR5 arm + BrainCo hand + Gimbal camera.
 
 Architecture:
   Meta Quest 3 (OpenXR App) ← WiFi → XRoboToolkit-PC-Service (C++ on Jetson)
@@ -7,9 +7,9 @@ Architecture:
                                           ↓
                                     TeleopModule (this file)
                                           ↓
-                          ┌───────────────┴───────────────┐
-                          ↓                               ↓
-                  UR5 arm (servoj TCP)          BrainCo Hand (Modbus)
+                  ┌───────────────────┬───┴──────────────┐
+                  ↓                   ↓                    ↓
+          UR5 arm (servoj TCP)  BrainCo Hand (Modbus)  Gimbal Camera (CH340 UART)
 
 Quest 3 compatibility note: The XR-Robotics PC Service SDK communicates via
 OpenXR, which Quest 3 natively supports. The prebuilt PICO APK must be
@@ -17,9 +17,10 @@ replaced with a Quest 3 build of the Unity XR client. See teleoperation_sdk/
 for build instructions.
 
 Modes:
-  IDLE     — teleop disabled, no tracking
-  ARMED    — teleop enabled, waiting for grip press (dead-man)
-  TRACKING — grip held, controller drives arm + hand
+  IDLE            — teleop disabled, no tracking
+  ARMED           — teleop enabled, waiting for grip press (dead-man)
+  TRACKING        — grip held, controller drives arm + hand
+  GIMBAL_TRACKING — headset orientation drives gimbal camera (independent of arm)
 
 Safety:
   - Grip button = dead-man switch (release → arm holds position)
@@ -61,6 +62,32 @@ ARM_POLL_INTERVAL = 0.5          # how often to refresh current joints from arm 
 DEFAULT_WORKSPACE_MIN = [-500.0, -500.0, 0.0]
 DEFAULT_WORKSPACE_MAX = [500.0, 500.0, 850.0]
 
+# Head tracking → gimbal
+HEAD_TRACK_HZ = 20.0              # head→gimbal update rate (was 5 Hz)
+HEAD_GIMBAL_DEADBAND = 0.15       # degrees; ignore changes smaller than this
+HEAD_EMA_ALPHA = 0.35             # EMA smoothing (0.0=full smooth, 1.0=raw)
+
+
+def _quat_to_yaw_pitch(qx: float, qy: float, qz: float, qw: float) -> tuple:
+    """Convert quaternion (x,y,z,w) to (yaw_deg, pitch_deg).
+
+    Uses forward-vector projection — robust for head tracking across
+    different quaternion conventions (OpenXR, Unity, etc.).
+
+    Yaw = horizontal angle of the forward-looking vector (head turn left/right).
+    Pitch = vertical angle of the forward-looking vector (head nod up/down).
+    Roll (head tilt) is intentionally ignored — it does not affect either output.
+    """
+    # Forward vector (0,0,1) rotated by quaternion [qx,qy,qz,qw]
+    fwd_x = 2.0 * (qx * qz + qw * qy)
+    fwd_y = 2.0 * (qy * qz - qw * qx)
+    fwd_z = 1.0 - 2.0 * (qx * qx + qy * qy)
+
+    yaw = math.degrees(math.atan2(fwd_x, fwd_z))
+    pitch = math.degrees(math.asin(max(-1.0, min(1.0, fwd_y))))
+
+    return yaw, pitch
+
 
 class TeleopModule(RobotModule):
     """XR teleoperation controller.
@@ -80,6 +107,12 @@ class TeleopModule(RobotModule):
         self._arm_controller = cfg.get("arm_controller", "right")
         self._ws_min = cfg.get("workspace_min_xyz", DEFAULT_WORKSPACE_MIN)
         self._ws_max = cfg.get("workspace_max_xyz", DEFAULT_WORKSPACE_MAX)
+
+        # Head tracking → gimbal config
+        self._head_to_gimbal_enabled = cfg.get("head_to_gimbal", False)
+        self._head_yaw_sign = cfg.get("head_yaw_sign", 1)
+        self._head_pitch_sign = cfg.get("head_pitch_sign", 1)
+        self._head_smoothing = cfg.get("head_smoothing", HEAD_EMA_ALPHA)
 
         # Runtime state (thread-safe via _lock)
         self._lock = threading.RLock()
@@ -105,6 +138,23 @@ class TeleopModule(RobotModule):
         self._current_joints_deg = [0.0] * 6
         self._target_joints_deg = [0.0] * 6
         self._last_arm_poll = 0.0
+
+        # Head tracking → gimbal state
+        self._gimbal_tracking = False
+        self._gimbal_calibrated = False
+        self._gimbal_calib_yaw = 0.0
+        self._gimbal_calib_pitch = 0.0
+        self._head_yaw = 0.0
+        self._head_pitch = 0.0
+        self._ema_yaw = 0.0
+        self._ema_pitch = 0.0
+        self._ema_initialized = False
+        self._gimbal_target_yaw = 0.0
+        self._gimbal_target_pitch = 0.0
+        self._head_pose_available = False
+        self._last_head_track = 0.0
+        self._gimbal_yaw_limits: Optional[tuple] = None
+        self._gimbal_pitch_limits: Optional[tuple] = None
 
         # URScript socket
         self._ur_sock: Optional[socket.socket] = None
@@ -148,6 +198,12 @@ class TeleopModule(RobotModule):
             "is_fault": False,
             "fault_text": "",
             "data_log_recording": False,
+            "gimbal_available": False,
+            "gimbal_tracking": False,
+            "gimbal_calibrated": False,
+            "head_yaw_deg": 0.0,
+            "head_pitch_deg": 0.0,
+            "head_pose_available": False,
         }
 
     def get_state(self) -> Dict[str, Any]:
@@ -168,14 +224,24 @@ class TeleopModule(RobotModule):
                 "is_fault": self._is_fault,
                 "fault_text": self._fault_text,
                 "data_log_recording": self._data_log_enabled,
+                "gimbal_available": self.robot is not None and self.robot.is_loaded("gimbal"),
+                "gimbal_tracking": self._gimbal_tracking,
+                "gimbal_calibrated": self._gimbal_calibrated,
+                "head_yaw_deg": round(self._head_yaw, 1),
+                "head_pitch_deg": round(self._head_pitch, 1),
+                "head_pose_available": self._head_pose_available,
             }
 
     def get_socketio_handlers(self) -> Dict[str, Any]:
         return {
-            "teleop_enable":     self._on_enable,
-            "teleop_disable":    self._on_disable,
-            "teleop_calibrate":  self._on_calibrate,
-            "teleop_toggle_log": self._on_toggle_log,
+            "teleop_enable":                self._on_enable,
+            "teleop_disable":               self._on_disable,
+            "teleop_calibrate":             self._on_calibrate,
+            "teleop_toggle_log":            self._on_toggle_log,
+            "teleop_gimbal_track_enable":   self._on_gimbal_track_enable,
+            "teleop_gimbal_track_disable":  self._on_gimbal_track_disable,
+            "teleop_gimbal_calibrate":      self._on_gimbal_calibrate,
+            "teleop_gimbal_home":           self._on_gimbal_home,
         }
 
     # ── lifecycle ──────────────────────────────────────────────────────────
@@ -302,6 +368,160 @@ class TeleopModule(RobotModule):
             else:
                 log.info("[Teleop] Data log started")
 
+    # ── gimbal head tracking handlers ──────────────────────────────────────
+
+    def _on_gimbal_track_enable(self, _data: dict = None, emit=None) -> None:
+        if not self._xr_initialized:
+            if emit:
+                emit("error", {"msg": "XR SDK not initialized"})
+            return
+        # Probe head pose availability (first successful read sets _head_pose_available)
+        head = self._read_head_pose()
+        if head is None:
+            if emit:
+                emit("error", {"msg": "Head tracking not available — SDK may need update"})
+            return
+        with self._lock:
+            self._gimbal_tracking = True
+            # Reset deadband targets so the first step always moves the gimbal
+            self._gimbal_target_yaw = float('inf')
+            self._gimbal_target_pitch = float('inf')
+            # Reset EMA filter to avoid stale values from previous session
+            self._ema_initialized = False
+        log.info("[Teleop] Gimbal head tracking enabled")
+
+    def _on_gimbal_track_disable(self, _data: dict = None, emit=None) -> None:
+        with self._lock:
+            self._gimbal_tracking = False
+        log.info("[Teleop] Gimbal head tracking disabled")
+
+    def _on_gimbal_calibrate(self, _data: dict = None, emit=None) -> None:
+        """Record current head orientation as the gimbal reference offset."""
+        if not self._xr_initialized:
+            if emit:
+                emit("error", {"msg": "XR SDK not initialized"})
+            return
+        head = self._read_head_pose()
+        if head is None:
+            if emit:
+                emit("error", {"msg": "No head tracking data — is headset connected?"})
+            return
+        qx, qy, qz, qw = head[3], head[4], head[5], head[6]
+        yaw, pitch = _quat_to_yaw_pitch(qx, qy, qz, qw)
+        with self._lock:
+            self._gimbal_calib_yaw = yaw
+            self._gimbal_calib_pitch = pitch
+            self._gimbal_calibrated = True
+        log.info("[Teleop] Gimbal calibration set — head yaw=%.1f°, pitch=%.1f°", yaw, pitch)
+
+    def _on_gimbal_home(self, _data: dict = None, emit=None) -> None:
+        gimbal = self._get_gimbal()
+        if gimbal is None:
+            if emit:
+                emit("error", {"msg": "Gimbal module not loaded"})
+            return
+        ok = gimbal.home()
+        if emit:
+            emit("gimbal_move_result", {"ok": ok})
+
+    # ── head tracking ──────────────────────────────────────────────────────
+
+    def _read_head_pose(self) -> Optional[List[float]]:
+        """Read Quest 3 headset pose. Returns [x, y, z, qx, qy, qz, qw] or None."""
+        if not self._xr_initialized:
+            return None
+        try:
+            if hasattr(xrt, 'get_headset_pose'):
+                pose = xrt.get_headset_pose()
+                if pose is not None and len(pose) >= 7:
+                    self._head_pose_available = True
+                    return [float(v) for v in pose[:7]]
+        except Exception as e:
+            log.debug("[Teleop] Head pose read failed: %s", e)
+        return None
+
+    def _step_head_tracking(self) -> None:
+        """One iteration of head→gimbal tracking at HEAD_TRACK_HZ."""
+        now = time.time()
+        if now - self._last_head_track < 1.0 / HEAD_TRACK_HZ:
+            return
+        self._last_head_track = now
+
+        # Read head pose and update display values regardless of gimbal hardware
+        head = self._read_head_pose()
+        if head is None:
+            return
+
+        qx, qy, qz, qw = head[3], head[4], head[5], head[6]
+        head_yaw, head_pitch = _quat_to_yaw_pitch(qx, qy, qz, qw)
+
+        # EMA smoothing — suppress jitter from Quest IMU noise
+        alpha = self._head_smoothing
+        with self._lock:
+            self._head_yaw = head_yaw
+            self._head_pitch = head_pitch
+            if not self._ema_initialized:
+                self._ema_yaw = head_yaw
+                self._ema_pitch = head_pitch
+                self._ema_initialized = True
+            else:
+                self._ema_yaw = alpha * head_yaw + (1.0 - alpha) * self._ema_yaw
+                self._ema_pitch = alpha * head_pitch + (1.0 - alpha) * self._ema_pitch
+
+        # Gimbal hardware is optional — only gate the move_to call
+        gimbal = self._get_gimbal()
+        if gimbal is None:
+            return
+
+        target_yaw, target_pitch = self._head_to_gimbal(self._ema_yaw, self._ema_pitch)
+        if target_yaw is None:
+            return
+
+        # Deadband: skip if change is negligible
+        if (abs(target_yaw - self._gimbal_target_yaw) < HEAD_GIMBAL_DEADBAND and
+                abs(target_pitch - self._gimbal_target_pitch) < HEAD_GIMBAL_DEADBAND):
+            return
+
+        self._gimbal_target_yaw = target_yaw
+        self._gimbal_target_pitch = target_pitch
+        gimbal.move_to(target_yaw, target_pitch)
+
+    def _head_to_gimbal(self, head_yaw: float, head_pitch: float) -> tuple:
+        """Map head orientation to gimbal target angles with calibration offset.
+
+        Returns (yaw, pitch) or (None, None) if uncalibrated.
+        """
+        if not self._gimbal_calibrated:
+            return None, None
+
+        # Apply calibration offset + direction sign
+        gimbal_yaw = (head_yaw - self._gimbal_calib_yaw) * self._head_yaw_sign
+        gimbal_pitch = (head_pitch - self._gimbal_calib_pitch) * self._head_pitch_sign
+
+        # Clamp to gimbal limits (read from gimbal module)
+        if self._gimbal_yaw_limits:
+            lo, hi = self._gimbal_yaw_limits
+            gimbal_yaw = max(lo, min(hi, gimbal_yaw))
+        if self._gimbal_pitch_limits:
+            lo, hi = self._gimbal_pitch_limits
+            gimbal_pitch = max(lo, min(hi, gimbal_pitch))
+
+        return gimbal_yaw, gimbal_pitch
+
+    def _get_gimbal(self):
+        """Get gimbal module reference, caching its limits if available."""
+        if not self.robot:
+            return None
+        gimbal = self.robot.get("gimbal")
+        if gimbal is None:
+            return None
+        # Lazy-init cached limits from gimbal config
+        if self._gimbal_yaw_limits is None:
+            cfg = getattr(gimbal, 'config', {})
+            self._gimbal_yaw_limits = tuple(cfg.get("yaw_limits", [-90, 90]))
+            self._gimbal_pitch_limits = tuple(cfg.get("pitch_limits", [-90, 60]))
+        return gimbal
+
     # ── control loop ───────────────────────────────────────────────────────
 
     def _control_loop(self) -> None:
@@ -311,22 +531,26 @@ class TeleopModule(RobotModule):
         while self._running:
             try:
                 active = self._active
-                if not active:
+                gimbal_tracking = self._gimbal_tracking
+
+                if not active and not gimbal_tracking:
                     time.sleep(idle_interval)
                     continue
 
-                tracking = self._grip_pressed if self._xr_initialized else False
-                self._tracking = tracking
-
-                # Read XR controller data
+                # Read XR controller data (needed for both arm and gimbal modes)
                 if self._xr_initialized:
                     self._read_controller()
 
-                if tracking and self._calibrated:
-                    self._step_tracking()
-                elif tracking and not self._calibrated:
-                    # Grip pressed but not calibrated — arm holds position
-                    pass
+                # ── Arm tracking (100 Hz) ──
+                if active:
+                    tracking = self._grip_pressed if self._xr_initialized else False
+                    self._tracking = tracking
+                    if tracking and self._calibrated:
+                        self._step_tracking()
+
+                # ── Gimbal head tracking (5 Hz, independent of arm) ──
+                if gimbal_tracking:
+                    self._step_head_tracking()
 
                 time.sleep(interval)
 
@@ -369,7 +593,7 @@ class TeleopModule(RobotModule):
 
     def _step_tracking(self) -> None:
         """One iteration of the tracking loop: IK → servoj → hand control."""
-        from robot_control.ur5_ik import pose_from_quat_xyz, ur5_ik
+        from teleoperation_sdk.ur5_ik import pose_from_quat_xyz, ur5_ik
 
         # Refresh current joint state from arm module
         self._refresh_joints()
@@ -458,7 +682,7 @@ class TeleopModule(RobotModule):
 
     def _get_current_fk(self, joints_rad: List[float]):
         """Compute current FK from joint angles."""
-        from robot_control.ur5_ik import ur5_fk
+        from teleoperation_sdk.ur5_ik import ur5_fk
         try:
             return ur5_fk(joints_rad)
         except Exception:

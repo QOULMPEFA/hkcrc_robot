@@ -29,6 +29,10 @@ log = logging.getLogger(__name__)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["SECRET_KEY"] = "robot-gui-secret"
+# WARNING: async_mode MUST be "threading" — NOT "eventlet".
+# _state_broadcast_loop() runs in threading.Thread and socketio.emit()
+# silently fails to deliver messages to eventlet-managed clients.
+# Symptom of breakage: all Web GUI state shows "—" (no data).
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # Global robot instance — created in main()
@@ -507,6 +511,7 @@ def main():
         # port omitted = auto-detect RS485
         "hand":   {"protocol": "modbus", "baudrate": 460800, "slave_id": 0x7F},
         "teleop": {"host": "192.168.56.101"},
+        "gimbal": {},
     }
     #
     # ═══════════════════════════════════════════════════════════════════════

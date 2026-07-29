@@ -559,6 +559,35 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   50%      { opacity: 0.6; }
 }
 
+/* ── gimbal camera panel ────────────────────────────────────────────────────── */
+.gimbal-status {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 0;
+  text-align: center;
+}
+.gimbal-angles { margin: 8px 0; }
+.gimbal-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 14px;
+  font-family: var(--mono);
+}
+.gimbal-label { color: var(--muted); min-width: 40px; }
+.gimbal-val { color: var(--text); }
+.gimbal-target { color: var(--accent2); font-size: 12px; }
+.gimbal-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  margin-top: 8px;
+}
+.gimbal-input-row label { color: var(--muted); font-size: 12px; }
+.gimbal-input-row input { font-family: var(--mono); }
+
 /* ── panel diagnostics line ──────────────────────────────────────────────── */
 .panel-diag {
   font-size: 11px;

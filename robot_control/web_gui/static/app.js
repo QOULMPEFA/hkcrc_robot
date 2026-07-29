@@ -15,6 +15,7 @@ const MODULE_META = {
   drive:  { icon: "🚗", name: "驱动电机", i18nKey: "module.drive", stub: false },
   demo:   { icon: "🎬", name: "演示序列", i18nKey: "module.demo",  stub: false },
   teleop: { icon: "🥽", name: "XR 遥操作", i18nKey: "module.teleop", stub: false },
+  gimbal: { icon: "📷", name: "云台相机", i18nKey: "module.gimbal", stub: false },
 };
 function _modName(meta) { return meta.i18nKey ? I18n.t(meta.i18nKey) : meta.name; }
 let ACTIVE_MODULES = [];
@@ -793,6 +794,7 @@ function _renderPanelContent(panelId, module) {
     case "drive":  _renderDrivePanel(panelId, body); break;
     case "demo":   _renderDemoPanel(panelId, body); break;
     case "teleop": _renderTeleopPanel(panelId, body); break;
+    case "gimbal": _renderGimbalPanel(panelId, body); break;
     default:       body.innerHTML = `<div style="color:var(--muted);padding:20px;text-align:center">${I18n.t("misc.no_ui", [module])}</div>`; break;
   }
 }
@@ -1816,6 +1818,24 @@ function _renderTeleopPanel(panelId, body) {
       <button class="btn-secondary ctrl" id="${panelId}-tl-calibrate">${t("teleop.calibrate")}</button>
       <button class="btn-secondary ctrl" id="${panelId}-tl-log">${t("teleop.toggle_log")}</button>
     </div>
+    <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px">
+      <b>${t("teleop.gimbal_section")}</b>
+    </div>
+    <div class="status-row" style="font-size:13px;margin-bottom:6px">
+      <span>${t("teleop.gimbal_status")}<b id="${panelId}-tl-gimbal-status">—</b></span>
+      <span>${t("teleop.gimbal_tracking")}<b id="${panelId}-tl-gimbal-track">—</b></span>
+      <span>${t("teleop.gimbal_calibrated")}<b id="${panelId}-tl-gimbal-calib">—</b></span>
+    </div>
+    <div style="font-size:12px;margin-bottom:6px">
+      <div><b>${t("teleop.gimbal_head_yaw")}:</b> <span id="${panelId}-tl-head-yaw">0.0</span>°
+           <b style="margin-left:8px">${t("teleop.gimbal_head_pitch")}:</b> <span id="${panelId}-tl-head-pitch">0.0</span>°</div>
+    </div>
+    <div class="btn-row" style="gap:4px">
+      <button class="btn-primary ctrl" id="${panelId}-tl-gimbal-enable">${t("teleop.gimbal_enable")}</button>
+      <button class="btn-warn ctrl"    id="${panelId}-tl-gimbal-disable">${t("teleop.gimbal_disable")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-tl-gimbal-calibrate">${t("teleop.gimbal_calibrate")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-tl-gimbal-home">${t("teleop.gimbal_home")}</button>
+    </div>
   `;
 
   const JOINT_NAMES = ["J1", "J2", "J3", "J4", "J5", "J6"];
@@ -1836,6 +1856,10 @@ function _renderTeleopPanel(panelId, body) {
   el(panelId + "-tl-disable")?.addEventListener("click",   () => socket.emit("teleop_disable"));
   el(panelId + "-tl-calibrate")?.addEventListener("click", () => socket.emit("teleop_calibrate"));
   el(panelId + "-tl-log")?.addEventListener("click",       () => socket.emit("teleop_toggle_log"));
+  el(panelId + "-tl-gimbal-enable")?.addEventListener("click",   () => socket.emit("teleop_gimbal_track_enable"));
+  el(panelId + "-tl-gimbal-disable")?.addEventListener("click",  () => socket.emit("teleop_gimbal_track_disable"));
+  el(panelId + "-tl-gimbal-calibrate")?.addEventListener("click", () => socket.emit("teleop_gimbal_calibrate"));
+  el(panelId + "-tl-gimbal-home")?.addEventListener("click",     () => socket.emit("teleop_gimbal_home"));
 }
 
 function _updateTeleopState(panelId, s) {
@@ -1862,6 +1886,106 @@ function _updateTeleopState(panelId, s) {
 
   if (s.target_joints_deg) s.target_joints_deg.forEach((a, i) => _maybeSet(el(panelId + `-tl-j${i}-tgt`), I18n.t("teleop.target") + fmt(a, 1) + "°"));
   if (s.current_joints_deg) s.current_joints_deg.forEach((a, i) => _maybeSet(el(panelId + `-tl-j${i}-act`), I18n.t("teleop.actual") + fmt(a, 1) + "°"));
+
+  // ── Gimbal head tracking section ──
+  const gimbalAvail = s.gimbal_available;
+  _maybeSet(el(panelId + "-tl-gimbal-status"),
+    gimbalAvail ? I18n.t("teleop.active_yes") : I18n.t("teleop.gimbal_unavailable"));
+  _maybeSet(el(panelId + "-tl-gimbal-track"),
+    s.gimbal_tracking ? I18n.t("teleop.tracking_yes") : I18n.t("teleop.tracking_no"));
+  _maybeSet(el(panelId + "-tl-gimbal-calib"),
+    s.gimbal_calibrated ? I18n.t("teleop.calib_yes") : I18n.t("teleop.calib_no"));
+  _maybeSet(el(panelId + "-tl-head-yaw"), fmt(s.head_yaw_deg || 0, 1));
+  _maybeSet(el(panelId + "-tl-head-pitch"), fmt(s.head_pitch_deg || 0, 1));
+
+  const gimbalBtns = ["-tl-gimbal-enable", "-tl-gimbal-disable", "-tl-gimbal-calibrate", "-tl-gimbal-home"];
+  gimbalBtns.forEach(suffix => {
+    const b = el(panelId + suffix);
+    if (b) b.disabled = !s.gimbal_available;
+  });
+}
+
+function _renderGimbalPanel(panelId, body) {
+  body.innerHTML = `
+    <div class="gimbal-status" id="${panelId}-gimbal-status">${I18n.t("gimbal.not_connected")}</div>
+    <div class="gimbal-angles">
+      <div class="gimbal-row">
+        <span class="gimbal-label">${I18n.t("gimbal.yaw")}</span>
+        <span class="gimbal-val" id="${panelId}-gimbal-yaw-cur">0.0°</span>
+        <span class="gimbal-val gimbal-target" id="${panelId}-gimbal-yaw-tgt">→ 0.0°</span>
+      </div>
+      <div class="gimbal-row">
+        <span class="gimbal-label">${I18n.t("gimbal.pitch")}</span>
+        <span class="gimbal-val" id="${panelId}-gimbal-pitch-cur">0.0°</span>
+        <span class="gimbal-val gimbal-target" id="${panelId}-gimbal-pitch-tgt">→ 0.0°</span>
+      </div>
+      <div class="gimbal-row" style="font-size:11px; color:var(--accent2)">
+        <span class="gimbal-label">${I18n.t("gimbal.rel_angle")}</span>
+        <span class="gimbal-val" id="${panelId}-gimbal-rel-yaw">0.0°</span>
+        <span class="gimbal-val" id="${panelId}-gimbal-rel-pitch">0.0°</span>
+      </div>
+      <div class="gimbal-row" style="font-size:11px; color:var(--text-muted)">
+        <span class="gimbal-label">${I18n.t("gimbal.home_pos")}</span>
+        <span class="gimbal-val" id="${panelId}-gimbal-home-yaw">0.0°</span>
+        <span class="gimbal-val" id="${panelId}-gimbal-home-pitch">0.0°</span>
+      </div>
+    </div>
+    <div class="gimbal-input-row">
+      <label>${I18n.t("gimbal.yaw")}:</label>
+      <input type="number" id="${panelId}-gimbal-yaw-in" value="0" step="1" min="-90" max="90" style="width:70px">
+      <label>${I18n.t("gimbal.pitch")}:</label>
+      <input type="number" id="${panelId}-gimbal-pitch-in" value="0" step="1" min="-90" max="60" style="width:70px">
+      <button class="btn-primary btn-sm" id="${panelId}-gimbal-move-to">${I18n.t("gimbal.move_to")}</button>
+    </div>
+    <div class="btn-row center" style="margin-top:6px; gap:4px">
+      <button class="btn-secondary btn-sm" id="${panelId}-gimbal-up">▲ ${I18n.t("gimbal.move_up")}</button>
+      <button class="btn-secondary btn-sm" id="${panelId}-gimbal-left">◀ ${I18n.t("gimbal.move_left")}</button>
+      <button class="btn-primary btn-sm" id="${panelId}-gimbal-home">${I18n.t("gimbal.home")}</button>
+      <button class="btn-secondary btn-sm" id="${panelId}-gimbal-right">${I18n.t("gimbal.move_right")} ▶</button>
+      <button class="btn-secondary btn-sm" id="${panelId}-gimbal-down">${I18n.t("gimbal.move_down")} ▼</button>
+    </div>
+    <div class="btn-row center" style="margin-top:4px">
+      <label style="font-size:12px">${I18n.t("gimbal.step")}:</label>
+      <select id="${panelId}-gimbal-step" style="font-size:12px;padding:2px 4px">
+        <option value="1">1°</option>
+        <option value="5" selected>5°</option>
+        <option value="10">10°</option>
+        <option value="15">15°</option>
+        <option value="30">30°</option>
+      </select>
+      <button class="btn-secondary btn-sm" id="${panelId}-gimbal-damping">${I18n.t("gimbal.damping")}</button>
+      <button class="btn-secondary btn-sm" id="${panelId}-gimbal-set-home">${I18n.t("gimbal.set_home")}</button>
+    </div>
+  `;
+  var step = () => parseInt(el(panelId + "-gimbal-step")?.value || 5);
+  el(panelId + "-gimbal-move-to")?.addEventListener("click", () => {
+    var y = parseFloat(el(panelId + "-gimbal-yaw-in")?.value || 0);
+    var p = parseFloat(el(panelId + "-gimbal-pitch-in")?.value || 0);
+    socket.emit("gimbal_move_to", { yaw: y, pitch: p });
+  });
+  el(panelId + "-gimbal-up")?.addEventListener("click",    () => socket.emit("gimbal_move_by", { dyaw: 0, dpitch: -step() }));
+  el(panelId + "-gimbal-down")?.addEventListener("click",  () => socket.emit("gimbal_move_by", { dyaw: 0, dpitch: step() }));
+  el(panelId + "-gimbal-left")?.addEventListener("click",  () => socket.emit("gimbal_move_by", { dyaw: -step(), dpitch: 0 }));
+  el(panelId + "-gimbal-right")?.addEventListener("click", () => socket.emit("gimbal_move_by", { dyaw: step(), dpitch: 0 }));
+  el(panelId + "-gimbal-home")?.addEventListener("click",    () => socket.emit("gimbal_home"));
+  el(panelId + "-gimbal-damping")?.addEventListener("click", () => socket.emit("gimbal_damping"));
+  el(panelId + "-gimbal-set-home")?.addEventListener("click", () => socket.emit("gimbal_set_home"));
+}
+
+function _updateGimbalState(panelId, s) {
+  var st = el(panelId + "-gimbal-status");
+  if (st) {
+    st.textContent = s.connected ? (s.is_fault ? s.fault_text || I18n.t("status.fault") : I18n.t("status.online")) : I18n.t("gimbal.not_connected");
+    st.style.color = s.connected ? (s.is_fault ? "var(--warn)" : "var(--accent2)") : "var(--danger)";
+  }
+  _maybeSet(el(panelId + "-gimbal-yaw-cur"), fmt(s.yaw_deg, 1) + "°");
+  _maybeSet(el(panelId + "-gimbal-pitch-cur"), fmt(s.pitch_deg, 1) + "°");
+  _maybeSet(el(panelId + "-gimbal-yaw-tgt"), "→ " + fmt(s.target_yaw_deg, 1) + "°");
+  _maybeSet(el(panelId + "-gimbal-pitch-tgt"), "→ " + fmt(s.target_pitch_deg, 1) + "°");
+  _maybeSet(el(panelId + "-gimbal-rel-yaw"), fmt(s.rel_yaw_deg || 0, 1) + "°");
+  _maybeSet(el(panelId + "-gimbal-rel-pitch"), fmt(s.rel_pitch_deg || 0, 1) + "°");
+  _maybeSet(el(panelId + "-gimbal-home-yaw"), fmt(s.home_yaw_deg || 0, 1) + "°");
+  _maybeSet(el(panelId + "-gimbal-home-pitch"), fmt(s.home_pitch_deg || 0, 1) + "°");
 }
 
 function _updateServoState(panelId, s) {
@@ -1985,6 +2109,10 @@ socket.on("robot_state", (s) => {
       case "teleop":
         _updateTeleopState(panelId, modState);
         PanelManager.updateStatus("teleop", modState.connected, modState.is_fault);
+        break;
+      case "gimbal":
+        _updateGimbalState(panelId, modState);
+        PanelManager.updateStatus("gimbal", modState.connected, modState.is_fault);
         break;
     }
   });
