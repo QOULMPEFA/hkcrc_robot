@@ -1844,9 +1844,9 @@ function _renderTeleopPanel(panelId, body) {
     </div>
     <div style="font-size:12px;margin-bottom:2px">
       <span><b>${t("teleop.gimbal_rate_limit")}:</b>
-        <input type="range" id="${panelId}-tl-rate-limit" min="5" max="500" step="5" value="60"
+        <input type="range" id="${panelId}-tl-rate-limit" min="5" max="500" step="5" value="300"
                style="width:60px;vertical-align:middle">
-        <input type="number" id="${panelId}-tl-rate-limit-num" min="5" max="500" step="5" value="60"
+        <input type="number" id="${panelId}-tl-rate-limit-num" min="5" max="500" step="5" value="300"
                style="width:48px;font-size:11px">°/s</span>
     </div>
     <div style="font-size:12px;margin-bottom:4px">

@@ -66,7 +66,7 @@ DEFAULT_WORKSPACE_MAX = [500.0, 500.0, 850.0]
 HEAD_TRACK_HZ = 20.0              # head→gimbal update rate
 HEAD_GIMBAL_DEADBAND = 0.3        # degrees; default deadband (adjustable via GUI)
 HEAD_EMA_ALPHA = 0.25             # EMA smoothing default (adjustable via GUI)
-HEAD_RATE_LIMIT = 60.0            # deg/s; max gimbal target velocity (adjustable via GUI)
+HEAD_RATE_LIMIT = 300.0           # deg/s; max gimbal target velocity (adjustable via GUI)
 
 
 def _quat_to_yaw_pitch(qx: float, qy: float, qz: float, qw: float) -> tuple:

@@ -510,7 +510,7 @@ def main():
         "motor":  {},
         # port omitted = auto-detect RS485
         "hand":   {"protocol": "modbus", "baudrate": 460800, "slave_id": 0x7F},
-        "teleop": {"host": "192.168.56.101", "head_yaw_sign": -1, "head_yaw_gain": 1.0, "head_pitch_gain": 1.0, "head_deadband": 0.3, "head_smoothing": 0.25, "head_rate_limit": 60.0},
+        "teleop": {"host": "192.168.56.101", "head_yaw_sign": -1, "head_yaw_gain": 1.0, "head_pitch_gain": 1.0, "head_deadband": 0.3, "head_smoothing": 0.25, "head_rate_limit": 300.0},
         "gimbal": {},
     }
     #
