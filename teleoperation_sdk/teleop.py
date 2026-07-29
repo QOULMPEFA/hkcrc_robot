@@ -67,8 +67,9 @@ HEAD_TRACK_HZ = 20.0              # head→gimbal update rate
 HEAD_GIMBAL_DEADBAND = 0.3        # degrees; default deadband (adjustable via GUI)
 HEAD_EMA_ALPHA = 0.25             # EMA smoothing default (adjustable via GUI)
 HEAD_RATE_LIMIT = 300.0           # deg/s; max gimbal target velocity (adjustable via GUI)
-HEAD_DEADZONE = 3.0              # degrees; hysteresis dead zone (only move when head exceeds this)
+HEAD_DEADZONE = 5.0              # degrees; hysteresis dead zone (only move when head exceeds this)
 HEAD_PRECISION = 0.5             # degrees; quantize target to this step (eliminate encoder hunting)
+HEAD_COOLDOWN = 0.25             # seconds; minimum interval between gimbal move commands
 
 
 def _quat_to_yaw_pitch(qx: float, qy: float, qz: float, qw: float) -> tuple:
@@ -167,6 +168,8 @@ class TeleopModule(RobotModule):
         self._head_dz_pitch = 0.0
         self._head_pose_available = False
         self._last_head_track = 0.0
+        self._last_gimbal_move = 0.0   # cooldown timer to suppress oscillation
+        self._head_cooldown = float(cfg.get("head_cooldown", HEAD_COOLDOWN))
 
         # URScript socket
         self._ur_sock: Optional[socket.socket] = None
@@ -258,6 +261,7 @@ class TeleopModule(RobotModule):
                 "head_rate_limit": self._head_rate_limit,
                 "head_deadzone": self._head_deadzone,
                 "head_precision": self._head_precision,
+                "head_cooldown": self._head_cooldown,
                 "gimbal_yaw_limits": list(self._effective_yaw_limits()),
                 "gimbal_pitch_limits": list(self._effective_pitch_limits()),
             }
@@ -421,8 +425,9 @@ class TeleopModule(RobotModule):
             self._gimbal_target_pitch = float('inf')
             self._head_dz_yaw = float('inf')
             self._head_dz_pitch = float('inf')
-            # Reset EMA filter to avoid stale values from previous session
+            # Reset EMA filter and cooldown to avoid stale values
             self._ema_initialized = False
+            self._last_gimbal_move = 0.0
         log.info("[Teleop] Gimbal head tracking enabled")
 
     def _on_gimbal_track_disable(self, _data: dict = None, emit=None) -> None:
@@ -514,8 +519,11 @@ class TeleopModule(RobotModule):
                 self._head_deadzone = max(0.5, min(15.0, float(data["deadzone"])))
             if "precision" in data:
                 self._head_precision = max(0.1, min(2.0, float(data["precision"])))
-        log.info("[Teleop] Head config: dz=%.1f° db=%.2f° sm=%.2f rate=%.0f°/s prec=%.1f°",
-                 self._head_deadzone, self._head_deadband, self._head_smoothing, self._head_rate_limit)
+            if "cooldown" in data:
+                self._head_cooldown = max(0.05, min(2.0, float(data["cooldown"])))
+        log.info("[Teleop] Head config: dz=%.1f° db=%.2f° sm=%.2f rate=%.0f°/s prec=%.1f° cool=%.2fs",
+                 self._head_deadzone, self._head_deadband, self._head_smoothing,
+                 self._head_rate_limit, self._head_cooldown)
         if emit:
             emit("head_config_updated", {
                 "head_deadband": self._head_deadband,
@@ -523,6 +531,7 @@ class TeleopModule(RobotModule):
                 "head_rate_limit": self._head_rate_limit,
                 "head_deadzone": self._head_deadzone,
                 "head_precision": self._head_precision,
+                "head_cooldown": self._head_cooldown,
             })
 
     # ── head tracking ──────────────────────────────────────────────────────
@@ -607,6 +616,13 @@ class TeleopModule(RobotModule):
         p = self._head_precision
         target_yaw = round(target_yaw / p) * p
         target_pitch = round(target_pitch / p) * p
+
+        # Cooldown: enforce minimum interval between gimbal moves to prevent
+        # feedback-loop oscillation (servo motion → camera view change →
+        # unconscious head reaction → new target → repeat).
+        if now - self._last_gimbal_move < self._head_cooldown:
+            return
+        self._last_gimbal_move = now
 
         # Update gimbal AND reset dead zone reference to current head angle
         self._head_dz_yaw = self._ema_yaw
