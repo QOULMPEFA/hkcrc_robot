@@ -68,6 +68,10 @@ class ArmController(RobotModule):
         self._state_thread: Optional[threading.Thread] = None
         self._logs: list[ArmLogEntry] = []
         self._collision_enabled = True
+        # Gravity vector in base frame [gx, gy, gz] (m/s^2). Default: flat mount.
+        self._gravity = [float(x) for x in cfg.get("gravity", [0.0, 0.0, -9.82])]
+        # Payload [mass_kg, cog_x, cog_y, cog_z] (kg, m). Default: 0.5 kg.
+        self._payload = [float(x) for x in cfg.get("payload", [0.5, 0.0, 0.0, 0.05])]
 
     # ── RobotModule metadata ───────────────────────────────────────────────
 
@@ -92,6 +96,8 @@ class ArmController(RobotModule):
             "robot_mode": "UNKNOWN", "safety_mode": "UNKNOWN", "fault_text": "",
             "collision_sensitivity": 0.3,
             "collision_warning": "",
+            "gravity": [0.0, 0.0, -9.82],
+            "payload": [0.5, 0.0, 0.0, 0.05],
             "logs": [], "timestamp": 0.0,
         }
 
@@ -104,6 +110,8 @@ class ArmController(RobotModule):
             "arm_home": self._on_home,
             "arm_stop": self._on_stop,
             "arm_set_collision_sensitivity": self._on_set_collision_sensitivity,
+            "arm_set_gravity": self._on_set_gravity,
+            "arm_set_payload": self._on_set_payload,
         }
 
     # ── lifecycle ─────────────────────────────────────────────────────────
@@ -240,6 +248,8 @@ class ArmController(RobotModule):
                 "fault_text": s.fault_text,
                 "collision_sensitivity": s.collision_sensitivity,
                 "collision_warning": s.collision_warning,
+                "gravity": list(self._gravity),
+                "payload": list(self._payload),
                 "logs": [{"ts": e.timestamp, "level": e.level, "msg": e.message}
                          for e in self._logs[-30:]],
                 "timestamp": s.timestamp,
@@ -466,6 +476,46 @@ class ArmController(RobotModule):
             if warning:
                 log.warning("[Arm] Collision warning: %s", warning)
 
+    # ── UR5 model compensation ────────────────────────────────────────────
+
+    def set_gravity(self, gx: float, gy: float, gz: float) -> None:
+        self._gravity = [gx, gy, gz]
+        self._send_urscript(f"set_gravity([{gx:.4f}, {gy:.4f}, {gz:.4f}])")
+        log.info("[Arm] set_gravity([%.2f, %.2f, %.2f])", gx, gy, gz)
+
+    def set_payload(self, mass: float, cog_x: float = 0.0, cog_y: float = 0.0,
+                    cog_z: float = 0.05) -> None:
+        self._payload = [mass, cog_x, cog_y, cog_z]
+        self._send_urscript(
+            f"set_payload({mass:.3f}, [{cog_x:.4f}, {cog_y:.4f}, {cog_z:.4f}])")
+        log.info("[Arm] set_payload(%.3f kg, CoG=[%.3f, %.3f, %.3f])",
+                 mass, cog_x, cog_y, cog_z)
+
+    def _on_set_gravity(self, data: dict, emit=None) -> None:
+        self.set_gravity(
+            float(data.get("gx", 0.0)),
+            float(data.get("gy", 0.0)),
+            float(data.get("gz", -9.82)),
+        )
+
+    def _on_set_payload(self, data: dict, emit=None) -> None:
+        self.set_payload(
+            float(data.get("mass", 0.5)),
+            float(data.get("cog_x", 0.0)),
+            float(data.get("cog_y", 0.0)),
+            float(data.get("cog_z", 0.05)),
+        )
+
+    def _apply_ur5_model(self) -> None:
+        """Send gravity vector and payload to UR5 for accurate dynamics."""
+        g = self._gravity
+        self._send_urscript(f"set_gravity([{g[0]:.4f}, {g[1]:.4f}, {g[2]:.4f}])")
+        p = self._payload
+        self._send_urscript(
+            f"set_payload({p[0]:.3f}, [{p[1]:.4f}, {p[2]:.4f}, {p[3]:.4f}])")
+        log.info("[Arm] Model applied — gravity=[%.2f, %.2f, %.2f], payload=%.3f kg",
+                 g[0], g[1], g[2], p[0])
+
     # ── internals ──────────────────────────────────────────────────────────
 
     def _speed_to_params(self, speed_pct: float):
@@ -525,6 +575,8 @@ class ArmController(RobotModule):
                     self._state.connected = True
                 log.info("[Arm] Connected to UR5e (%s)", self._host)
                 self._add_log("info", f"已连接 ({self._host})")
+                # Apply gravity compensation and payload for UR5 dynamics
+                self._apply_ur5_model()
                 # Apply default collision sensitivity on connect
                 self._send_urscript("set_collision_detection(True)")
                 self._poll_loop(dash_sock)
