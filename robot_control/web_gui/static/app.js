@@ -1102,11 +1102,16 @@ function _renderArmPanel(panelId, body) {
   const armGrid = el(panelId + "-arm-joints");
   const slSpeed = el(panelId + "-sl-arm-speed");
 
+  // Track which joints the user has manually edited; don't overwrite from state
+  const _dirtyJoints = new Set();
+  const _clearDirty = () => _dirtyJoints.clear();
+
   const _sendCurrentAngles = () => {
     const angles = ARM_JOINTS.map((_, i) => {
       const inp = el(panelId + `-arm-j${i}`); return inp ? parseFloat(inp.value) : 0;
     });
     socket.emit("arm_move_joints", { angles, speed_pct: parseInt(slSpeed?.value || 20) });
+    _clearDirty();
   };
 
   if (armGrid) {
@@ -1140,6 +1145,7 @@ function _renderArmPanel(panelId, body) {
           const v = parseFloat(numInp.value) || 0;
           slider.value = Math.max(-180, Math.min(180, v));
           slider.dispatchEvent(new Event("input", { bubbles: true }));
+          _dirtyJoints.add(i);
         });
       }
 
@@ -2355,7 +2361,7 @@ function _updateArmState(panelId, s) {
       const num = el(panelId + `-arm-j${i}-num`);
       const val = el(panelId + `-arm-j${i}-val`);
       if (sl && !sl.matches(":active")) sl.value = angle;
-      if (num && document.activeElement !== num) num.value = angle;
+      if (num && !_dirtyJoints.has(i)) num.value = angle;
       if (val) val.textContent = fmt(angle, 1) + "°";
     });
   }
