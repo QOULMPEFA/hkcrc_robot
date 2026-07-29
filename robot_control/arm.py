@@ -404,7 +404,7 @@ class ArmController(RobotModule):
         # vals: size, type, timestamp, isConnected, isEnabled, isPowerOn,
         #       isEmergencyStopped, isSecurityStopped, isProgramRunning,
         #       isProgramPaused, robotMode, controlMode, speedFraction
-        robot_mode_int = vals[9]  # bool but stored as byte in struct
+        robot_mode_int = vals[10]
         is_enabled = vals[4]      # isRealRobotEnabled
         is_estopped = vals[6]     # isEmergencyStopped
         is_sec_stopped = vals[7]  # isSecurityStopped
