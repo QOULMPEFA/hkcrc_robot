@@ -113,6 +113,11 @@ class TeleopModule(RobotModule):
         self._head_yaw_sign = cfg.get("head_yaw_sign", 1)
         self._head_pitch_sign = cfg.get("head_pitch_sign", 1)
         self._head_smoothing = cfg.get("head_smoothing", HEAD_EMA_ALPHA)
+        self._head_yaw_gain = float(cfg.get("head_yaw_gain", 1.0))
+        self._head_pitch_gain = float(cfg.get("head_pitch_gain", 1.0))
+        # Optional gimbal limit overrides (None = use gimbal module defaults)
+        self._gimbal_yaw_limits_override = cfg.get("gimbal_yaw_limits", None)
+        self._gimbal_pitch_limits_override = cfg.get("gimbal_pitch_limits", None)
 
         # Runtime state (thread-safe via _lock)
         self._lock = threading.RLock()
@@ -153,8 +158,6 @@ class TeleopModule(RobotModule):
         self._gimbal_target_pitch = 0.0
         self._head_pose_available = False
         self._last_head_track = 0.0
-        self._gimbal_yaw_limits: Optional[tuple] = None
-        self._gimbal_pitch_limits: Optional[tuple] = None
 
         # URScript socket
         self._ur_sock: Optional[socket.socket] = None
@@ -204,6 +207,10 @@ class TeleopModule(RobotModule):
             "head_yaw_deg": 0.0,
             "head_pitch_deg": 0.0,
             "head_pose_available": False,
+            "head_yaw_gain": 1.0,
+            "head_pitch_gain": 1.0,
+            "gimbal_yaw_limits": [-90, 90],
+            "gimbal_pitch_limits": [-90, 60],
         }
 
     def get_state(self) -> Dict[str, Any]:
@@ -230,6 +237,10 @@ class TeleopModule(RobotModule):
                 "head_yaw_deg": round(self._head_yaw, 1),
                 "head_pitch_deg": round(self._head_pitch, 1),
                 "head_pose_available": self._head_pose_available,
+                "head_yaw_gain": self._head_yaw_gain,
+                "head_pitch_gain": self._head_pitch_gain,
+                "gimbal_yaw_limits": list(self._effective_yaw_limits()),
+                "gimbal_pitch_limits": list(self._effective_pitch_limits()),
             }
 
     def get_socketio_handlers(self) -> Dict[str, Any]:
@@ -242,6 +253,8 @@ class TeleopModule(RobotModule):
             "teleop_gimbal_track_disable":  self._on_gimbal_track_disable,
             "teleop_gimbal_calibrate":      self._on_gimbal_calibrate,
             "teleop_gimbal_home":           self._on_gimbal_home,
+            "teleop_set_head_gains":        self._on_set_head_gains,
+            "teleop_set_gimbal_limits":     self._on_set_gimbal_limits,
         }
 
     # ── lifecycle ──────────────────────────────────────────────────────────
@@ -424,6 +437,46 @@ class TeleopModule(RobotModule):
         if emit:
             emit("gimbal_move_result", {"ok": ok})
 
+    def _on_set_head_gains(self, data: dict = None, emit=None) -> None:
+        """Set head→gimbal gain coefficients from web GUI."""
+        if data is None:
+            data = {}
+        with self._lock:
+            if "yaw_gain" in data:
+                self._head_yaw_gain = max(0.1, min(5.0, float(data["yaw_gain"])))
+            if "pitch_gain" in data:
+                self._head_pitch_gain = max(0.1, min(5.0, float(data["pitch_gain"])))
+        log.info("[Teleop] Head gains set: yaw=%.2f pitch=%.2f",
+                 self._head_yaw_gain, self._head_pitch_gain)
+        if emit:
+            emit("head_gains_updated", {
+                "head_yaw_gain": self._head_yaw_gain,
+                "head_pitch_gain": self._head_pitch_gain,
+            })
+
+    def _on_set_gimbal_limits(self, data: dict = None, emit=None) -> None:
+        """Override gimbal angle limits from web GUI."""
+        if data is None:
+            data = {}
+        with self._lock:
+            if "yaw_min" in data and "yaw_max" in data:
+                self._gimbal_yaw_limits_override = [
+                    float(data["yaw_min"]), float(data["yaw_max"])]
+            if "pitch_min" in data and "pitch_max" in data:
+                self._gimbal_pitch_limits_override = [
+                    float(data["pitch_min"]), float(data["pitch_max"])]
+        log.info("[Teleop] Gimbal limits set: yaw=%s pitch=%s",
+                 self._gimbal_yaw_limits_override, self._gimbal_pitch_limits_override)
+        if emit:
+            emit("gimbal_limits_updated", {
+                "gimbal_yaw_limits": (list(self._effective_yaw_limits())
+                                      if self._gimbal_yaw_limits_override is None
+                                      else self._gimbal_yaw_limits_override),
+                "gimbal_pitch_limits": (list(self._effective_pitch_limits())
+                                        if self._gimbal_pitch_limits_override is None
+                                        else self._gimbal_pitch_limits_override),
+            })
+
     # ── head tracking ──────────────────────────────────────────────────────
 
     def _read_head_pose(self) -> Optional[List[float]]:
@@ -494,33 +547,43 @@ class TeleopModule(RobotModule):
         if not self._gimbal_calibrated:
             return None, None
 
-        # Apply calibration offset + direction sign
-        gimbal_yaw = (head_yaw - self._gimbal_calib_yaw) * self._head_yaw_sign
-        gimbal_pitch = (head_pitch - self._gimbal_calib_pitch) * self._head_pitch_sign
+        # Apply calibration offset + direction sign + gain coefficient
+        gimbal_yaw = (head_yaw - self._gimbal_calib_yaw) * self._head_yaw_sign * self._head_yaw_gain
+        gimbal_pitch = (head_pitch - self._gimbal_calib_pitch) * self._head_pitch_sign * self._head_pitch_gain
 
-        # Clamp to gimbal limits (read from gimbal module)
-        if self._gimbal_yaw_limits:
-            lo, hi = self._gimbal_yaw_limits
-            gimbal_yaw = max(lo, min(hi, gimbal_yaw))
-        if self._gimbal_pitch_limits:
-            lo, hi = self._gimbal_pitch_limits
-            gimbal_pitch = max(lo, min(hi, gimbal_pitch))
+        # Clamp to effective gimbal limits (override → module config → defaults)
+        lo, hi = self._effective_yaw_limits()
+        gimbal_yaw = max(lo, min(hi, gimbal_yaw))
+        lo, hi = self._effective_pitch_limits()
+        gimbal_pitch = max(lo, min(hi, gimbal_pitch))
 
         return gimbal_yaw, gimbal_pitch
 
     def _get_gimbal(self):
-        """Get gimbal module reference, caching its limits if available."""
+        """Get gimbal module reference."""
         if not self.robot:
             return None
-        gimbal = self.robot.get("gimbal")
-        if gimbal is None:
-            return None
-        # Lazy-init cached limits from gimbal config
-        if self._gimbal_yaw_limits is None:
+        return self.robot.get("gimbal")
+
+    def _effective_yaw_limits(self) -> tuple:
+        """Return (min, max) yaw limits: override > gimbal module > default."""
+        if self._gimbal_yaw_limits_override is not None:
+            return tuple(self._gimbal_yaw_limits_override)
+        gimbal = self._get_gimbal()
+        if gimbal is not None:
             cfg = getattr(gimbal, 'config', {})
-            self._gimbal_yaw_limits = tuple(cfg.get("yaw_limits", [-90, 90]))
-            self._gimbal_pitch_limits = tuple(cfg.get("pitch_limits", [-90, 60]))
-        return gimbal
+            return tuple(cfg.get("yaw_limits", [-90, 90]))
+        return (-90, 90)
+
+    def _effective_pitch_limits(self) -> tuple:
+        """Return (min, max) pitch limits: override > gimbal module > default."""
+        if self._gimbal_pitch_limits_override is not None:
+            return tuple(self._gimbal_pitch_limits_override)
+        gimbal = self._get_gimbal()
+        if gimbal is not None:
+            cfg = getattr(gimbal, 'config', {})
+            return tuple(cfg.get("pitch_limits", [-90, 60]))
+        return (-90, 60)
 
     # ── control loop ───────────────────────────────────────────────────────
 

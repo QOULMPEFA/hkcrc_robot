@@ -240,6 +240,10 @@ I18n.zh["teleop.gimbal_disable"]      = "禁用头部跟踪";
 I18n.zh["teleop.gimbal_calibrate"]    = "标定头部参考位";
 I18n.zh["teleop.gimbal_home"]         = "云台归位";
 I18n.zh["teleop.gimbal_unavailable"]  = "不可用";
+I18n.zh["teleop.gimbal_yaw_gain"]   = "偏航增益";
+I18n.zh["teleop.gimbal_pitch_gain"] = "俯仰增益";
+I18n.zh["teleop.gimbal_set_gains"]  = "应用增益";
+I18n.zh["teleop.gimbal_limits"]     = "限位";
 
 I18n.en["teleop.gimbal_section"]      = "Head Tracking (Gimbal)";
 I18n.en["teleop.gimbal_status"]       = "Gimbal:";
@@ -252,6 +256,10 @@ I18n.en["teleop.gimbal_disable"]      = "Disable Head Track";
 I18n.en["teleop.gimbal_calibrate"]    = "Calibrate Head Ref";
 I18n.en["teleop.gimbal_home"]         = "Gimbal Home";
 I18n.en["teleop.gimbal_unavailable"]  = "N/A";
+I18n.en["teleop.gimbal_yaw_gain"]   = "Yaw Gain";
+I18n.en["teleop.gimbal_pitch_gain"] = "Pitch Gain";
+I18n.en["teleop.gimbal_set_gains"]  = "Apply Gains";
+I18n.en["teleop.gimbal_limits"]     = "Limits";
 
 /* === camera panel === */
 I18n.zh["camera.offline"]  = "摄像头未连接";
