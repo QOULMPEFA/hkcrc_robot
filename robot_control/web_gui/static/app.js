@@ -1832,23 +1832,34 @@ function _renderTeleopPanel(panelId, body) {
     </div>
     <div style="font-size:12px;margin-bottom:2px">
       <span><b>${t("teleop.gimbal_deadband")}:</b>
-        <input type="range" id="${panelId}-tl-deadband" min="0.05" max="1.0" step="0.05" value="0.30"
-               style="width:70px;vertical-align:middle">
-        <span id="${panelId}-tl-deadband-val">0.30</span>°</span>
+        <input type="range" id="${panelId}-tl-deadband" min="0.02" max="2.0" step="0.02" value="0.30"
+               style="width:60px;vertical-align:middle">
+        <input type="number" id="${panelId}-tl-deadband-num" min="0.02" max="2.0" step="0.02" value="0.30"
+               style="width:48px;font-size:11px">°</span>
       <span style="margin-left:8px"><b>${t("teleop.gimbal_smoothing")}:</b>
-        <input type="range" id="${panelId}-tl-smoothing" min="0.05" max="1.0" step="0.05" value="0.35"
-               style="width:70px;vertical-align:middle">
-        <span id="${panelId}-tl-smoothing-val">0.35</span></span>
+        <input type="range" id="${panelId}-tl-smoothing" min="0.02" max="1.0" step="0.02" value="0.25"
+               style="width:60px;vertical-align:middle">
+        <input type="number" id="${panelId}-tl-smoothing-num" min="0.02" max="1.0" step="0.02" value="0.25"
+               style="width:48px;font-size:11px"></span>
+    </div>
+    <div style="font-size:12px;margin-bottom:2px">
+      <span><b>${t("teleop.gimbal_rate_limit")}:</b>
+        <input type="range" id="${panelId}-tl-rate-limit" min="5" max="500" step="5" value="60"
+               style="width:60px;vertical-align:middle">
+        <input type="number" id="${panelId}-tl-rate-limit-num" min="5" max="500" step="5" value="60"
+               style="width:48px;font-size:11px">°/s</span>
     </div>
     <div style="font-size:12px;margin-bottom:4px">
       <span><b>${t("teleop.gimbal_yaw_gain")}:</b>
         <input type="range" id="${panelId}-tl-yaw-gain" min="0.1" max="3.0" step="0.05" value="1.0"
-               style="width:70px;vertical-align:middle">
-        <span id="${panelId}-tl-yaw-gain-val">1.00</span></span>
+               style="width:60px;vertical-align:middle">
+        <input type="number" id="${panelId}-tl-yaw-gain-num" min="0.1" max="3.0" step="0.05" value="1.0"
+               style="width:48px;font-size:11px"></span>
       <span style="margin-left:8px"><b>${t("teleop.gimbal_pitch_gain")}:</b>
         <input type="range" id="${panelId}-tl-pitch-gain" min="0.1" max="3.0" step="0.05" value="1.0"
-               style="width:70px;vertical-align:middle">
-        <span id="${panelId}-tl-pitch-gain-val">1.00</span></span>
+               style="width:60px;vertical-align:middle">
+        <input type="number" id="${panelId}-tl-pitch-gain-num" min="0.1" max="3.0" step="0.05" value="1.0"
+               style="width:48px;font-size:11px"></span>
       <button class="btn-secondary ctrl" id="${panelId}-tl-apply-config" style="font-size:11px;margin-left:8px">${t("teleop.gimbal_apply_config")}</button>
     </div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:6px">
@@ -1885,32 +1896,30 @@ function _renderTeleopPanel(panelId, body) {
   el(panelId + "-tl-gimbal-disable")?.addEventListener("click",  () => socket.emit("teleop_gimbal_track_disable"));
   el(panelId + "-tl-gimbal-calibrate")?.addEventListener("click", () => socket.emit("teleop_gimbal_calibrate"));
   el(panelId + "-tl-gimbal-home")?.addEventListener("click",     () => socket.emit("teleop_gimbal_home"));
-  // Noise-suppression sliders — live display update
-  const deadbandSlider = el(panelId + "-tl-deadband");
-  const smoothingSlider = el(panelId + "-tl-smoothing");
-  const yawGainSlider = el(panelId + "-tl-yaw-gain");
-  const pitchGainSlider = el(panelId + "-tl-pitch-gain");
-  deadbandSlider?.addEventListener("input", () => {
-    _maybeSet(el(panelId + "-tl-deadband-val"), parseFloat(deadbandSlider.value).toFixed(2));
-  });
-  smoothingSlider?.addEventListener("input", () => {
-    _maybeSet(el(panelId + "-tl-smoothing-val"), parseFloat(smoothingSlider.value).toFixed(2));
-  });
-  yawGainSlider?.addEventListener("input", () => {
-    _maybeSet(el(panelId + "-tl-yaw-gain-val"), parseFloat(yawGainSlider.value).toFixed(2));
-  });
-  pitchGainSlider?.addEventListener("input", () => {
-    _maybeSet(el(panelId + "-tl-pitch-gain-val"), parseFloat(pitchGainSlider.value).toFixed(2));
-  });
-  // Combined apply: sends deadband+smoothing + gains in one go
+  // Helper: sync range slider ↔ number input
+  const _bindRangeNum = (sliderId, numId) => {
+    const slider = el(sliderId);
+    const num = el(numId);
+    if (!slider || !num) return;
+    slider.addEventListener("input", () => { num.value = parseFloat(slider.value).toFixed(2); });
+    num.addEventListener("input", () => { slider.value = parseFloat(num.value) || 0; });
+  };
+  _bindRangeNum(panelId + "-tl-deadband", panelId + "-tl-deadband-num");
+  _bindRangeNum(panelId + "-tl-smoothing", panelId + "-tl-smoothing-num");
+  _bindRangeNum(panelId + "-tl-rate-limit", panelId + "-tl-rate-limit-num");
+  _bindRangeNum(panelId + "-tl-yaw-gain", panelId + "-tl-yaw-gain-num");
+  _bindRangeNum(panelId + "-tl-pitch-gain", panelId + "-tl-pitch-gain-num");
+
+  // Apply button: sends all noise-suppression + gain params
   el(panelId + "-tl-apply-config")?.addEventListener("click", () => {
     socket.emit("teleop_set_head_config", {
-      deadband: parseFloat(deadbandSlider?.value || 0.3),
-      smoothing: parseFloat(smoothingSlider?.value || 0.35),
+      deadband: parseFloat(el(panelId + "-tl-deadband")?.value || 0.3),
+      smoothing: parseFloat(el(panelId + "-tl-smoothing")?.value || 0.25),
+      rate_limit: parseFloat(el(panelId + "-tl-rate-limit")?.value || 60),
     });
     socket.emit("teleop_set_head_gains", {
-      yaw_gain: parseFloat(yawGainSlider?.value || 1.0),
-      pitch_gain: parseFloat(pitchGainSlider?.value || 1.0),
+      yaw_gain: parseFloat(el(panelId + "-tl-yaw-gain")?.value || 1.0),
+      pitch_gain: parseFloat(el(panelId + "-tl-pitch-gain")?.value || 1.0),
     });
   });
 }
@@ -1951,23 +1960,23 @@ function _updateTeleopState(panelId, s) {
   _maybeSet(el(panelId + "-tl-head-yaw"), fmt(s.head_yaw_deg || 0, 1));
   _maybeSet(el(panelId + "-tl-head-pitch"), fmt(s.head_pitch_deg || 0, 1));
 
-  // Noise-suppression params — update sliders + displays from state
+  // Noise-suppression params — update sliders + number inputs from state
+  const _syncSliderNum = (sliderId, numId, value, decimals) => {
+    const slider = el(sliderId);
+    const num = el(numId);
+    if (slider) slider.value = value;
+    if (num) num.value = value.toFixed(decimals);
+  };
   const deadband = s.head_deadband != null ? s.head_deadband : 0.3;
-  const smoothing = s.head_smoothing != null ? s.head_smoothing : 0.35;
+  const smoothing = s.head_smoothing != null ? s.head_smoothing : 0.25;
+  const rateLimit = s.head_rate_limit != null ? s.head_rate_limit : 60;
   const yawGain = s.head_yaw_gain != null ? s.head_yaw_gain : 1.0;
   const pitchGain = s.head_pitch_gain != null ? s.head_pitch_gain : 1.0;
-  const deadbandSlider = el(panelId + "-tl-deadband");
-  const smoothingSlider = el(panelId + "-tl-smoothing");
-  const yawGainSlider = el(panelId + "-tl-yaw-gain");
-  const pitchGainSlider = el(panelId + "-tl-pitch-gain");
-  if (deadbandSlider) deadbandSlider.value = deadband;
-  if (smoothingSlider) smoothingSlider.value = smoothing;
-  if (yawGainSlider) yawGainSlider.value = yawGain;
-  if (pitchGainSlider) pitchGainSlider.value = pitchGain;
-  _maybeSet(el(panelId + "-tl-deadband-val"), deadband.toFixed(2));
-  _maybeSet(el(panelId + "-tl-smoothing-val"), smoothing.toFixed(2));
-  _maybeSet(el(panelId + "-tl-yaw-gain-val"), yawGain.toFixed(2));
-  _maybeSet(el(panelId + "-tl-pitch-gain-val"), pitchGain.toFixed(2));
+  _syncSliderNum(panelId + "-tl-deadband", panelId + "-tl-deadband-num", deadband, 2);
+  _syncSliderNum(panelId + "-tl-smoothing", panelId + "-tl-smoothing-num", smoothing, 2);
+  _syncSliderNum(panelId + "-tl-rate-limit", panelId + "-tl-rate-limit-num", rateLimit, 0);
+  _syncSliderNum(panelId + "-tl-yaw-gain", panelId + "-tl-yaw-gain-num", yawGain, 2);
+  _syncSliderNum(panelId + "-tl-pitch-gain", panelId + "-tl-pitch-gain-num", pitchGain, 2);
 
   // Limits display
   if (s.gimbal_yaw_limits) {

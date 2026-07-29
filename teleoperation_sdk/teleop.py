@@ -65,7 +65,8 @@ DEFAULT_WORKSPACE_MAX = [500.0, 500.0, 850.0]
 # Head tracking → gimbal
 HEAD_TRACK_HZ = 20.0              # head→gimbal update rate
 HEAD_GIMBAL_DEADBAND = 0.3        # degrees; default deadband (adjustable via GUI)
-HEAD_EMA_ALPHA = 0.35             # EMA smoothing default (adjustable via GUI)
+HEAD_EMA_ALPHA = 0.25             # EMA smoothing default (adjustable via GUI)
+HEAD_RATE_LIMIT = 60.0            # deg/s; max gimbal target velocity (adjustable via GUI)
 
 
 def _quat_to_yaw_pitch(qx: float, qy: float, qz: float, qw: float) -> tuple:
@@ -114,6 +115,7 @@ class TeleopModule(RobotModule):
         self._head_pitch_sign = cfg.get("head_pitch_sign", 1)
         self._head_smoothing = cfg.get("head_smoothing", HEAD_EMA_ALPHA)
         self._head_deadband = float(cfg.get("head_deadband", HEAD_GIMBAL_DEADBAND))
+        self._head_rate_limit = float(cfg.get("head_rate_limit", HEAD_RATE_LIMIT))
         self._head_yaw_gain = float(cfg.get("head_yaw_gain", 1.0))
         self._head_pitch_gain = float(cfg.get("head_pitch_gain", 1.0))
         # Optional gimbal limit overrides (None = use gimbal module defaults)
@@ -212,6 +214,7 @@ class TeleopModule(RobotModule):
             "head_pitch_gain": 1.0,
             "head_deadband": HEAD_GIMBAL_DEADBAND,
             "head_smoothing": HEAD_EMA_ALPHA,
+            "head_rate_limit": HEAD_RATE_LIMIT,
             "gimbal_yaw_limits": [-90, 90],
             "gimbal_pitch_limits": [-90, 60],
         }
@@ -244,6 +247,7 @@ class TeleopModule(RobotModule):
                 "head_pitch_gain": self._head_pitch_gain,
                 "head_deadband": self._head_deadband,
                 "head_smoothing": self._head_smoothing,
+                "head_rate_limit": self._head_rate_limit,
                 "gimbal_yaw_limits": list(self._effective_yaw_limits()),
                 "gimbal_pitch_limits": list(self._effective_pitch_limits()),
             }
@@ -492,12 +496,15 @@ class TeleopModule(RobotModule):
                 self._head_deadband = max(0.02, min(2.0, float(data["deadband"])))
             if "smoothing" in data:
                 self._head_smoothing = max(0.02, min(1.0, float(data["smoothing"])))
-        log.info("[Teleop] Head config: deadband=%.2f° smoothing=%.2f",
-                 self._head_deadband, self._head_smoothing)
+            if "rate_limit" in data:
+                self._head_rate_limit = max(5.0, min(500.0, float(data["rate_limit"])))
+        log.info("[Teleop] Head config: deadband=%.2f° smoothing=%.2f rate=%.0f°/s",
+                 self._head_deadband, self._head_smoothing, self._head_rate_limit)
         if emit:
             emit("head_config_updated", {
                 "head_deadband": self._head_deadband,
                 "head_smoothing": self._head_smoothing,
+                "head_rate_limit": self._head_rate_limit,
             })
 
     # ── head tracking ──────────────────────────────────────────────────────
@@ -557,6 +564,17 @@ class TeleopModule(RobotModule):
         if (abs(target_yaw - self._gimbal_target_yaw) < self._head_deadband and
                 abs(target_pitch - self._gimbal_target_pitch) < self._head_deadband):
             return
+
+        # Rate limit: cap velocity to suppress rapid fluctuations
+        # Skip on first step after enable (target reset to inf)
+        if math.isfinite(self._gimbal_target_yaw):
+            max_step = self._head_rate_limit / HEAD_TRACK_HZ
+            dyaw = target_yaw - self._gimbal_target_yaw
+            dpitch = target_pitch - self._gimbal_target_pitch
+            if abs(dyaw) > max_step:
+                target_yaw = self._gimbal_target_yaw + math.copysign(max_step, dyaw)
+            if abs(dpitch) > max_step:
+                target_pitch = self._gimbal_target_pitch + math.copysign(max_step, dpitch)
 
         self._gimbal_target_yaw = target_yaw
         self._gimbal_target_pitch = target_pitch
