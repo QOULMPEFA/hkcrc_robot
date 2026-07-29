@@ -1848,6 +1848,11 @@ function _renderTeleopPanel(panelId, body) {
                style="width:55px;vertical-align:middle">
         <input type="number" id="${panelId}-tl-smoothing-num" min="0.02" max="1.0" step="0.02" value="0.25"
                style="width:44px;font-size:11px"></span>
+      <span style="margin-left:4px"><b>${t("teleop.gimbal_precision")}:</b>
+        <input type="range" id="${panelId}-tl-precision" min="0.1" max="2.0" step="0.1" value="0.5"
+               style="width:50px;vertical-align:middle">
+        <input type="number" id="${panelId}-tl-precision-num" min="0.1" max="2.0" step="0.1" value="0.5"
+               style="width:42px;font-size:11px">°</span>
     </div>
     <div style="font-size:12px;margin-bottom:2px">
       <span><b>${t("teleop.gimbal_rate_limit")}:</b>
@@ -1914,6 +1919,7 @@ function _renderTeleopPanel(panelId, body) {
   _bindRangeNum(panelId + "-tl-deadzone", panelId + "-tl-deadzone-num");
   _bindRangeNum(panelId + "-tl-deadband", panelId + "-tl-deadband-num");
   _bindRangeNum(panelId + "-tl-smoothing", panelId + "-tl-smoothing-num");
+  _bindRangeNum(panelId + "-tl-precision", panelId + "-tl-precision-num");
   _bindRangeNum(panelId + "-tl-rate-limit", panelId + "-tl-rate-limit-num");
   _bindRangeNum(panelId + "-tl-yaw-gain", panelId + "-tl-yaw-gain-num");
   _bindRangeNum(panelId + "-tl-pitch-gain", panelId + "-tl-pitch-gain-num");
@@ -1925,6 +1931,7 @@ function _renderTeleopPanel(panelId, body) {
       deadband: parseFloat(el(panelId + "-tl-deadband")?.value || 0.3),
       smoothing: parseFloat(el(panelId + "-tl-smoothing")?.value || 0.25),
       rate_limit: parseFloat(el(panelId + "-tl-rate-limit")?.value || 300),
+      precision: parseFloat(el(panelId + "-tl-precision")?.value || 0.5),
     });
     socket.emit("teleop_set_head_gains", {
       yaw_gain: parseFloat(el(panelId + "-tl-yaw-gain")?.value || 1.0),
@@ -1979,12 +1986,14 @@ function _updateTeleopState(panelId, s) {
   const deadzone = s.head_deadzone != null ? s.head_deadzone : 3.0;
   const deadband = s.head_deadband != null ? s.head_deadband : 0.3;
   const smoothing = s.head_smoothing != null ? s.head_smoothing : 0.25;
+  const precision = s.head_precision != null ? s.head_precision : 0.5;
   const rateLimit = s.head_rate_limit != null ? s.head_rate_limit : 300;
   const yawGain = s.head_yaw_gain != null ? s.head_yaw_gain : 1.0;
   const pitchGain = s.head_pitch_gain != null ? s.head_pitch_gain : 1.0;
   _syncSliderNum(panelId + "-tl-deadzone", panelId + "-tl-deadzone-num", deadzone, 1);
   _syncSliderNum(panelId + "-tl-deadband", panelId + "-tl-deadband-num", deadband, 2);
   _syncSliderNum(panelId + "-tl-smoothing", panelId + "-tl-smoothing-num", smoothing, 2);
+  _syncSliderNum(panelId + "-tl-precision", panelId + "-tl-precision-num", precision, 1);
   _syncSliderNum(panelId + "-tl-rate-limit", panelId + "-tl-rate-limit-num", rateLimit, 0);
   _syncSliderNum(panelId + "-tl-yaw-gain", panelId + "-tl-yaw-gain-num", yawGain, 2);
   _syncSliderNum(panelId + "-tl-pitch-gain", panelId + "-tl-pitch-gain-num", pitchGain, 2);
