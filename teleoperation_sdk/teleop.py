@@ -63,9 +63,9 @@ DEFAULT_WORKSPACE_MIN = [-500.0, -500.0, 0.0]
 DEFAULT_WORKSPACE_MAX = [500.0, 500.0, 850.0]
 
 # Head tracking → gimbal
-HEAD_TRACK_HZ = 20.0              # head→gimbal update rate (was 5 Hz)
-HEAD_GIMBAL_DEADBAND = 0.15       # degrees; ignore changes smaller than this
-HEAD_EMA_ALPHA = 0.35             # EMA smoothing (0.0=full smooth, 1.0=raw)
+HEAD_TRACK_HZ = 20.0              # head→gimbal update rate
+HEAD_GIMBAL_DEADBAND = 0.3        # degrees; default deadband (adjustable via GUI)
+HEAD_EMA_ALPHA = 0.35             # EMA smoothing default (adjustable via GUI)
 
 
 def _quat_to_yaw_pitch(qx: float, qy: float, qz: float, qw: float) -> tuple:
@@ -113,6 +113,7 @@ class TeleopModule(RobotModule):
         self._head_yaw_sign = cfg.get("head_yaw_sign", 1)
         self._head_pitch_sign = cfg.get("head_pitch_sign", 1)
         self._head_smoothing = cfg.get("head_smoothing", HEAD_EMA_ALPHA)
+        self._head_deadband = float(cfg.get("head_deadband", HEAD_GIMBAL_DEADBAND))
         self._head_yaw_gain = float(cfg.get("head_yaw_gain", 1.0))
         self._head_pitch_gain = float(cfg.get("head_pitch_gain", 1.0))
         # Optional gimbal limit overrides (None = use gimbal module defaults)
@@ -209,6 +210,8 @@ class TeleopModule(RobotModule):
             "head_pose_available": False,
             "head_yaw_gain": 1.0,
             "head_pitch_gain": 1.0,
+            "head_deadband": HEAD_GIMBAL_DEADBAND,
+            "head_smoothing": HEAD_EMA_ALPHA,
             "gimbal_yaw_limits": [-90, 90],
             "gimbal_pitch_limits": [-90, 60],
         }
@@ -239,6 +242,8 @@ class TeleopModule(RobotModule):
                 "head_pose_available": self._head_pose_available,
                 "head_yaw_gain": self._head_yaw_gain,
                 "head_pitch_gain": self._head_pitch_gain,
+                "head_deadband": self._head_deadband,
+                "head_smoothing": self._head_smoothing,
                 "gimbal_yaw_limits": list(self._effective_yaw_limits()),
                 "gimbal_pitch_limits": list(self._effective_pitch_limits()),
             }
@@ -255,6 +260,7 @@ class TeleopModule(RobotModule):
             "teleop_gimbal_home":           self._on_gimbal_home,
             "teleop_set_head_gains":        self._on_set_head_gains,
             "teleop_set_gimbal_limits":     self._on_set_gimbal_limits,
+            "teleop_set_head_config":       self._on_set_head_config,
         }
 
     # ── lifecycle ──────────────────────────────────────────────────────────
@@ -477,6 +483,23 @@ class TeleopModule(RobotModule):
                                         else self._gimbal_pitch_limits_override),
             })
 
+    def _on_set_head_config(self, data: dict = None, emit=None) -> None:
+        """Set head tracking noise-suppression params from web GUI."""
+        if data is None:
+            data = {}
+        with self._lock:
+            if "deadband" in data:
+                self._head_deadband = max(0.02, min(2.0, float(data["deadband"])))
+            if "smoothing" in data:
+                self._head_smoothing = max(0.02, min(1.0, float(data["smoothing"])))
+        log.info("[Teleop] Head config: deadband=%.2f° smoothing=%.2f",
+                 self._head_deadband, self._head_smoothing)
+        if emit:
+            emit("head_config_updated", {
+                "head_deadband": self._head_deadband,
+                "head_smoothing": self._head_smoothing,
+            })
+
     # ── head tracking ──────────────────────────────────────────────────────
 
     def _read_head_pose(self) -> Optional[List[float]]:
@@ -530,9 +553,9 @@ class TeleopModule(RobotModule):
         if target_yaw is None:
             return
 
-        # Deadband: skip if change is negligible
-        if (abs(target_yaw - self._gimbal_target_yaw) < HEAD_GIMBAL_DEADBAND and
-                abs(target_pitch - self._gimbal_target_pitch) < HEAD_GIMBAL_DEADBAND):
+        # Deadband: skip if change is below threshold (suppresses IMU jitter)
+        if (abs(target_yaw - self._gimbal_target_yaw) < self._head_deadband and
+                abs(target_pitch - self._gimbal_target_pitch) < self._head_deadband):
             return
 
         self._gimbal_target_yaw = target_yaw
