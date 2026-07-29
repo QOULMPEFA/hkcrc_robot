@@ -468,6 +468,8 @@ def main():
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
     )
+    # Enable debug logging for head→gimbal pipeline diagnostics
+    logging.getLogger("teleoperation_sdk.teleop").setLevel(logging.DEBUG)
 
     auth.init_db()
 

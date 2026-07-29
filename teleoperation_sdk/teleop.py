@@ -591,6 +591,10 @@ class TeleopModule(RobotModule):
             head_dpitch = abs(self._ema_pitch - self._head_dz_pitch)
             if head_dyaw < self._head_deadzone and head_dpitch < self._head_deadzone:
                 return  # head hasn't moved enough — gimbal stays frozen
+            log.debug("[Teleop] Dead zone passed: head_dyaw=%.1f head_dpitch=%.1f "
+                      "ema=(%.1f,%.1f) dz=(%.1f,%.1f) raw=(%.1f,%.1f)",
+                      head_dyaw, head_dpitch, self._ema_yaw, self._ema_pitch,
+                      self._head_dz_yaw, self._head_dz_pitch, head_yaw, head_pitch)
 
         target_yaw, target_pitch = self._head_to_gimbal(self._ema_yaw, self._ema_pitch)
         if target_yaw is None:
@@ -621,8 +625,14 @@ class TeleopModule(RobotModule):
         # feedback-loop oscillation (servo motion → camera view change →
         # unconscious head reaction → new target → repeat).
         if now - self._last_gimbal_move < self._head_cooldown:
+            log.debug("[Teleop] Cooldown active: %.2fs since last move (need %.2fs)",
+                      now - self._last_gimbal_move, self._head_cooldown)
             return
         self._last_gimbal_move = now
+        log.debug("[Teleop] Pipeline → gimbal target: (%.1f°, %.1f°) "
+                  "from ema=(%.1f,%.1f) dz=(%.1f,%.1f) precision=%.1f",
+                  target_yaw, target_pitch, self._ema_yaw, self._ema_pitch,
+                  self._head_dz_yaw, self._head_dz_pitch, p)
 
         # Update gimbal AND reset dead zone reference to current head angle
         self._head_dz_yaw = self._ema_yaw
