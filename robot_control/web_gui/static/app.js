@@ -19,6 +19,18 @@ const MODULE_META = {
 };
 function _modName(meta) { return meta.i18nKey ? I18n.t(meta.i18nKey) : meta.name; }
 let ACTIVE_MODULES = [];
+// ═══════════════════════════════════════════════════════════════════════════
+// WARNING: _armDirtyJoints MUST stay at module scope.
+// It is referenced by BOTH _renderArmPanel (closure) and _updateArmState
+// (global function).  Moving it inside _renderArmPanel (e.g. as const) will
+// cause a ReferenceError in _updateArmState, which cascades: the uncaught
+// exception inside the forEach callback of socket.on("robot_state",...) stops
+// the entire loop, so ALL panels after "arm" stop receiving state updates.
+// Symptom: every hardware gauge shows "—" (no data).
+// See fix: 2026-07-30, commit reference in git log.
+// ═══════════════════════════════════════════════════════════════════════════
+// Per-arm-panel dirty-joint tracking (panelId → Set of joint indices).
+const _armDirtyJoints = new Map();
 
 const el  = (id) => document.getElementById(id);
 const fmt = (v, d = 2) => (typeof v === "number" ? v.toFixed(d) : "—");
@@ -552,6 +564,8 @@ const KeyBindingManager = {
                          fn: ()=>socket.emit("arm_disable") },
     "arm.home":        { type:"click", module:"arm", descKey:"arm.home",
                          fn: ()=>socket.emit("arm_home") },
+    "arm.set_home":    { type:"click", module:"arm", descKey:"arm.set_home",
+                         fn: ()=>socket.emit("arm_set_home") },
     "arm.stop":        { type:"click", module:"arm", descKey:"arm.stop",
                          fn: ()=>socket.emit("arm_stop") },
     "arm.reset":       { type:"click", module:"arm", descKey:"arm.reset",
@@ -563,6 +577,10 @@ const KeyBindingManager = {
                          fn: ()=>socket.emit("hand_close") },
     "hand.pinch":      { type:"click", module:"hand", descKey:"hand.pinch",
                          fn: ()=>socket.emit("hand_pinch") },
+    "hand.enable":     { type:"click", module:"hand", descKey:"hand.enable",
+                         fn: ()=>socket.emit("hand_enable") },
+    "hand.disable":    { type:"click", module:"hand", descKey:"hand.disable",
+                         fn: ()=>socket.emit("hand_disable") },
     "servo.spread":    { type:"click", module:"servo", descKey:"servo.spread",
                          fn: ()=>{ const p=_getActivePanelId("servo"); if(!p)return; const slH=el(p+"-servo-head-angle"),slT=el(p+"-servo-tail-angle"),slS=el(p+"-sl-servo-speed"); socket.emit("servo_spread",{head_angle:parseFloat(slH?.value||90),tail_angle:parseFloat(slT?.value||-90),mean_dps:parseFloat(slS?.value||200)}); } },
     "servo.shrink":    { type:"click", module:"servo", descKey:"servo.shrink",
@@ -1089,6 +1107,7 @@ function _renderArmPanel(panelId, body) {
       <button class="btn-primary ctrl"   id="${panelId}-arm-enable" data-bind-action="arm.enable">${t("arm.enable")}</button>
       <button class="btn-secondary ctrl" id="${panelId}-arm-disable" data-bind-action="arm.disable">${t("arm.disable")}</button>
       <button class="btn-primary ctrl"   id="${panelId}-arm-home" data-bind-action="arm.home">${t("arm.home")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-arm-set-home" data-bind-action="arm.set_home">${t("arm.set_home")}</button>
       <button class="btn-secondary ctrl" id="${panelId}-arm-stop" data-bind-action="arm.stop">${t("arm.stop")}</button>
       <button class="btn-warn ctrl"      id="${panelId}-arm-reset" data-bind-action="arm.reset">${t("arm.reset")}</button>
     </div>
@@ -1102,16 +1121,22 @@ function _renderArmPanel(panelId, body) {
   const armGrid = el(panelId + "-arm-joints");
   const slSpeed = el(panelId + "-sl-arm-speed");
 
-  // Track which joints the user has manually edited; don't overwrite from state
-  const _dirtyJoints = new Set();
-  const _clearDirty = () => _dirtyJoints.clear();
+  // Track which joints the user has manually edited; don't overwrite from state.
+  // ⚠ _armDirtyJoints is module-level (see warning at declaration). Do NOT
+  // replace this with a local const — _updateArmState needs it too.
+  _armDirtyJoints.set(panelId, new Set());
 
   const _sendCurrentAngles = () => {
+    // Read from NUMBER inputs (not sliders) — the number input is what
+    // the user explicitly typed and is protected by _armDirtyJoints.
     const angles = ARM_JOINTS.map((_, i) => {
-      const inp = el(panelId + `-arm-j${i}`); return inp ? parseFloat(inp.value) : 0;
+      const num = el(panelId + `-arm-j${i}-num`);
+      if (num) { const v = parseFloat(num.value); if (!isNaN(v)) return v; }
+      const sl = el(panelId + `-arm-j${i}`);
+      return sl ? parseFloat(sl.value) : 0;
     });
     socket.emit("arm_move_joints", { angles, speed_pct: parseInt(slSpeed?.value || 20) });
-    _clearDirty();
+    _armDirtyJoints.get(panelId)?.clear();
   };
 
   if (armGrid) {
@@ -1145,7 +1170,7 @@ function _renderArmPanel(panelId, body) {
           const v = parseFloat(numInp.value) || 0;
           slider.value = Math.max(-180, Math.min(180, v));
           slider.dispatchEvent(new Event("input", { bubbles: true }));
-          _dirtyJoints.add(i);
+          _armDirtyJoints.get(panelId)?.add(i);
         });
       }
 
@@ -1195,12 +1220,18 @@ function _renderArmPanel(panelId, body) {
   }
 
   const btnHome    = el(panelId + "-arm-home");
+  const btnSetHome = el(panelId + "-arm-set-home");
   const btnStop    = el(panelId + "-arm-stop");
   const btnEnable  = el(panelId + "-arm-enable");
   const btnDisable = el(panelId + "-arm-disable");
   const btnReset   = el(panelId + "-arm-reset");
 
-  if (btnHome)    btnHome.addEventListener("click",    () => socket.emit("arm_home"));
+  if (btnHome) {
+    btnHome.addEventListener("pointerdown", () => socket.emit("arm_home"));
+    btnHome.addEventListener("pointerup",   () => socket.emit("arm_stop"));
+    btnHome.addEventListener("pointerleave", () => socket.emit("arm_stop"));
+  }
+  if (btnSetHome) btnSetHome.addEventListener("click", () => socket.emit("arm_set_home"));
   if (btnStop)    btnStop.addEventListener("click",    () => socket.emit("arm_stop"));
   if (btnEnable)  btnEnable.addEventListener("click",  () => socket.emit("arm_enable"));
   if (btnDisable) btnDisable.addEventListener("click", () => socket.emit("arm_disable"));
@@ -1220,6 +1251,10 @@ function _renderHandPanel(panelId, body) {
       <span>${t("hand.force")}<b id="${panelId}-hand-force">—</b> N</span>
     </div>
     <div class="finger-grid" id="${panelId}-hand-fingers"></div>
+    <div class="btn-row">
+      <button class="btn-primary ctrl"   id="${panelId}-hand-enable" data-bind-action="hand.enable">${t("hand.enable")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-hand-disable" data-bind-action="hand.disable">${t("hand.disable")}</button>
+    </div>
     <div class="btn-row">
       <button class="btn-primary ctrl"   id="${panelId}-hand-open" data-bind-action="hand.open">${t("hand.open")}</button>
       <button class="btn-primary ctrl"   id="${panelId}-hand-close" data-bind-action="hand.close">${t("hand.close")}</button>
@@ -1257,9 +1292,13 @@ function _renderHandPanel(panelId, body) {
   const btnOpen  = el(panelId + "-hand-open");
   const btnClose = el(panelId + "-hand-close");
   const btnPinch = el(panelId + "-hand-pinch");
+  const btnEnable  = el(panelId + "-hand-enable");
+  const btnDisable = el(panelId + "-hand-disable");
   if (btnOpen)  btnOpen.addEventListener("click",  () => socket.emit("hand_open"));
   if (btnClose) btnClose.addEventListener("click", () => socket.emit("hand_close"));
   if (btnPinch) btnPinch.addEventListener("click", () => socket.emit("hand_pinch"));
+  if (btnEnable)  btnEnable.addEventListener("click",  () => socket.emit("hand_enable"));
+  if (btnDisable) btnDisable.addEventListener("click", () => socket.emit("hand_disable"));
 }
 
 // ── Motor Panel ────────────────────────────────────────────────────────────────
@@ -1883,22 +1922,25 @@ function _renderTeleopPanel(panelId, body) {
         <input type="number" id="${panelId}-tl-rate-limit-num" min="5" max="500" step="5" value="300"
                style="width:48px;font-size:11px">°/s</span>
     </div>
+    <div style="font-size:12px;margin-bottom:2px;margin-top:6px;border-top:1px solid var(--border);padding-top:4px">
+      <b>${t("teleop.gimbal_sensitivity_label")}</b>
+    </div>
     <div style="font-size:12px;margin-bottom:4px">
       <span><b>${t("teleop.gimbal_yaw_gain")}:</b>
         <input type="range" id="${panelId}-tl-yaw-gain" min="0.1" max="3.0" step="0.05" value="1.0"
                style="width:60px;vertical-align:middle">
         <input type="number" id="${panelId}-tl-yaw-gain-num" min="0.1" max="3.0" step="0.05" value="1.0"
-               style="width:48px;font-size:11px"></span>
-      <span style="margin-left:8px"><b>${t("teleop.gimbal_pitch_gain")}:</b>
+               style="width:48px;font-size:11px">×</span>
+      <span style="margin-left:12px"><b>${t("teleop.gimbal_pitch_gain")}:</b>
         <input type="range" id="${panelId}-tl-pitch-gain" min="0.1" max="3.0" step="0.05" value="1.0"
                style="width:60px;vertical-align:middle">
         <input type="number" id="${panelId}-tl-pitch-gain-num" min="0.1" max="3.0" step="0.05" value="1.0"
-               style="width:48px;font-size:11px"></span>
-      <button class="btn-secondary ctrl" id="${panelId}-tl-apply-config" style="font-size:11px;margin-left:8px">${t("teleop.gimbal_apply_config")}</button>
+               style="width:48px;font-size:11px">×</span>
+      <button class="btn-primary ctrl" id="${panelId}-tl-apply-config" style="font-size:11px;margin-left:8px">${t("teleop.gimbal_apply_config")}</button>
     </div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:6px">
       ${t("teleop.gimbal_limits")}: Yaw [<span id="${panelId}-tl-yaw-limit-lo">-90</span>, <span id="${panelId}-tl-yaw-limit-hi">90</span>]°
-      Pitch [<span id="${panelId}-tl-pitch-limit-lo">-90</span>, <span id="${panelId}-tl-pitch-limit-hi">60</span>]°
+      Pitch [<span id="${panelId}-tl-pitch-limit-lo">-50</span>, <span id="${panelId}-tl-pitch-limit-hi">60</span>]°
     </div>
     <div class="btn-row" style="gap:4px">
       <button class="btn-primary ctrl" id="${panelId}-tl-gimbal-enable">${t("teleop.gimbal_enable")}</button>
@@ -2066,7 +2108,7 @@ function _renderGimbalPanel(panelId, body) {
       <label>${I18n.t("gimbal.yaw")}:</label>
       <input type="number" id="${panelId}-gimbal-yaw-in" value="0" step="1" min="-90" max="90" style="width:70px">
       <label>${I18n.t("gimbal.pitch")}:</label>
-      <input type="number" id="${panelId}-gimbal-pitch-in" value="0" step="1" min="-90" max="60" style="width:70px">
+      <input type="number" id="${panelId}-gimbal-pitch-in" value="0" step="1" min="-50" max="60" style="width:70px">
       <button class="btn-primary btn-sm" id="${panelId}-gimbal-move-to">${I18n.t("gimbal.move_to")}</button>
     </div>
     <div class="btn-row center" style="margin-top:6px; gap:4px">
@@ -2088,6 +2130,11 @@ function _renderGimbalPanel(panelId, body) {
       <button class="btn-secondary btn-sm" id="${panelId}-gimbal-damping">${I18n.t("gimbal.damping")}</button>
       <button class="btn-secondary btn-sm" id="${panelId}-gimbal-set-home">${I18n.t("gimbal.set_home")}</button>
     </div>
+    <div class="btn-row center" style="margin-top:6px; border-top:1px solid var(--border); padding-top:6px">
+      <span style="font-size:10px; color:var(--text-muted)">${I18n.t("gimbal.optimizer")}</span>
+      <button class="btn-primary btn-sm toggle-on"  id="${panelId}-gimbal-opt-on"  style="padding:2px 10px;font-size:11px">ON</button>
+      <button class="btn-secondary btn-sm toggle-off" id="${panelId}-gimbal-opt-off" style="padding:2px 10px;font-size:11px">OFF</button>
+    </div>
   `;
   var step = () => parseInt(el(panelId + "-gimbal-step")?.value || 5);
   el(panelId + "-gimbal-move-to")?.addEventListener("click", () => {
@@ -2102,6 +2149,8 @@ function _renderGimbalPanel(panelId, body) {
   el(panelId + "-gimbal-home")?.addEventListener("click",    () => socket.emit("gimbal_home"));
   el(panelId + "-gimbal-damping")?.addEventListener("click", () => socket.emit("gimbal_damping"));
   el(panelId + "-gimbal-set-home")?.addEventListener("click", () => socket.emit("gimbal_set_home"));
+  el(panelId + "-gimbal-opt-on")?.addEventListener("click",  () => socket.emit("gimbal_toggle_optimizer", { enabled: true }));
+  el(panelId + "-gimbal-opt-off")?.addEventListener("click", () => socket.emit("gimbal_toggle_optimizer", { enabled: false }));
 }
 
 function _updateGimbalState(panelId, s) {
@@ -2118,6 +2167,18 @@ function _updateGimbalState(panelId, s) {
   _maybeSet(el(panelId + "-gimbal-rel-pitch"), fmt(s.rel_pitch_deg || 0, 1) + "°");
   _maybeSet(el(panelId + "-gimbal-home-yaw"), fmt(s.home_yaw_deg || 0, 1) + "°");
   _maybeSet(el(panelId + "-gimbal-home-pitch"), fmt(s.home_pitch_deg || 0, 1) + "°");
+  // Optimizer toggle state
+  var optOn = s.optimizer && s.optimizer.enabled;
+  var btnOn = el(panelId + "-gimbal-opt-on");
+  var btnOff = el(panelId + "-gimbal-opt-off");
+  if (btnOn) {
+    btnOn.style.background = optOn ? "var(--accent2)" : "";
+    btnOn.style.fontWeight = optOn ? "bold" : "";
+  }
+  if (btnOff) {
+    btnOff.style.background = !optOn ? "var(--danger)" : "";
+    btnOff.style.fontWeight = !optOn ? "bold" : "";
+  }
 }
 
 function _updateServoState(panelId, s) {
@@ -2182,6 +2243,11 @@ function _updateServoState(panelId, s) {
 // State Handler
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ⚠ ERRORS IN UPDATE FUNCTIONS ARE FATAL — any uncaught exception inside
+// the forEach callback breaks the entire iteration.  All panels AFTER the
+// failing one silently stop receiving state.  If you add a variable used
+// by an update function, declare it at module scope, NEVER inside a render
+// function.  (2026-07-30: _armDirtyJoints bug caused all gauges to show "—").
 socket.on("robot_state", (s) => {
   // Find all open panels and update their content
   PanelManager._panels.forEach((p, panelId) => {
@@ -2360,8 +2426,11 @@ function _updateArmState(panelId, s) {
       const sl = el(panelId + `-arm-j${i}`);
       const num = el(panelId + `-arm-j${i}-num`);
       const val = el(panelId + `-arm-j${i}-val`);
-      if (sl && !sl.matches(":active")) sl.value = angle;
-      if (num && !_dirtyJoints.has(i)) num.value = angle;
+      // ⚠ _armDirtyJoints check protects both slider AND number input from
+      // state-broadcast overwrite while user is editing. Without this, the
+      // 5 Hz state loop reverts typed values before Execute can read them.
+      if (sl && !sl.matches(":active") && !(_armDirtyJoints.get(panelId) || new Set()).has(i)) sl.value = angle;
+      if (num && !(_armDirtyJoints.get(panelId) || new Set()).has(i)) num.value = angle;
       if (val) val.textContent = fmt(angle, 1) + "°";
     });
   }
@@ -2408,24 +2477,14 @@ function _updateArmState(panelId, s) {
 function _updateHandState(panelId, s) {
   _maybeSet(el(panelId + "-hand-enabled"), s.is_enabled ? I18n.t("hand.enabled") : I18n.t("hand.disabled"));
   _maybeSet(el(panelId + "-hand-force"), fmt(s.grip_force_n, 1));
-  if (s.finger_limits) {
-    s.finger_limits.forEach((lim, i) => {
-      const sl = el(panelId + `-hand-f${i}`);
-      if (sl) {
-        sl.min = lim.min / 1000;
-        sl.max = lim.max / 1000;
-      }
-    });
-  }
+  // Finger limits from hardware are in native units (not normalized 0-1000),
+  // so we don't clamp slider ranges to them. Sliders stay at 0-1 (0%-100%).
   if (s.finger_positions) {
     s.finger_positions.forEach((pos, i) => {
       const sl = el(panelId + `-hand-f${i}`);
       const val = el(panelId + `-hand-f${i}-val`);
       if (sl && !sl.matches(":active")) sl.value = pos;
-      if (val) {
-        const maxPct = s.finger_limits ? Math.round(s.finger_limits[i].max / 10) : 100;
-        val.textContent = fmt(pos * 100, 0) + "%";
-      }
+      if (val) val.textContent = fmt(pos * 100, 0) + "%";
     });
   }
 }
@@ -2692,6 +2751,24 @@ if (ROLE === "admin") {
       });
     });
     socket.on("error", (data) => alert(data.msg));
+    socket.on("optimizer_updated", (cfg) => {
+      // Update all open gimbal panels
+      PanelManager._panels.forEach((p, panelId) => {
+        if (p.module === "gimbal") {
+          var optOn = cfg && cfg.enabled;
+          var btnOn = el(panelId + "-gimbal-opt-on");
+          var btnOff = el(panelId + "-gimbal-opt-off");
+          if (btnOn) {
+            btnOn.style.background = optOn ? "var(--accent2)" : "";
+            btnOn.style.fontWeight = optOn ? "bold" : "";
+          }
+          if (btnOff) {
+            btnOff.style.background = !optOn ? "var(--danger)" : "";
+            btnOff.style.fontWeight = !optOn ? "bold" : "";
+          }
+        }
+      });
+    });
 
     // Key binding table
     const bindTbody = el("bind-table-body");

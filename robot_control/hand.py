@@ -116,6 +116,8 @@ class HandController(RobotModule):
 
     def get_socketio_handlers(self) -> Dict[str, callable]:
         return {
+            "hand_enable":       self._on_enable,
+            "hand_disable":      self._on_disable,
             "hand_open":        self._on_open,
             "hand_close":       self._on_close,
             "hand_pinch":       self._on_pinch,
@@ -214,6 +216,12 @@ class HandController(RobotModule):
 
     # ── SocketIO handlers ────────────────────────────────────────────────
 
+    def _on_enable(self, _data: dict = None, emit=None) -> None:
+        self.enable()
+
+    def _on_disable(self, _data: dict = None, emit=None) -> None:
+        self.disable()
+
     def _on_open(self, _data: dict = None, emit=None) -> None:
         self.open()
 
@@ -295,6 +303,12 @@ class HandController(RobotModule):
                          self._protocol, self._slave_id)
                 log.info("[Hand] Finger limits: %s",
                          [f"{l['min']}-{l['max']}" for l in self._finger_limits])
+                # Check motor state
+                try:
+                    ms = await self._client.get_motor_state(self._slave_id)
+                    log.info("[Hand] Motor state after connect: %s", ms)
+                except Exception as _ms_exc:
+                    log.warning("[Hand] get_motor_state failed: %s", _ms_exc)
         except Exception as exc:
             log.warning("[Hand] Connection failed: %s — will retry", exc)
             # Clean up partial state before retry.
@@ -470,11 +484,14 @@ class HandController(RobotModule):
         try:
             if cmd == "set_finger":
                 idx, pos, spd = args
-                limit = self._finger_limits[idx]
-                target = max(limit["min"], min(limit["max"], int(pos * 1000)))
+                # Scale 0.0-1.0 → 0-1000 normalized (no clamping to hardware limits;
+                # the FingerUnitMode.Normalized tells the SDK to map 0-1000 → hw range).
+                target = max(0, min(1000, int(pos * 1000)))
                 with self._lock:
                     current = [int(p * 1000) for p in self._finger_positions]
                     current[idx] = target
+                log.info("[Hand] _handle_cmd set_finger: idx=%d target=%d (raw 0-1000)",
+                         idx, target)
                 if self._protocol == "can":
                     await self._client.set_finger_positions(
                         self._slave_id, current)
@@ -488,11 +505,11 @@ class HandController(RobotModule):
 
             elif cmd == "set_all":
                 positions, spd = args
-                targets = [
-                    max(self._finger_limits[i]["min"],
-                        min(self._finger_limits[i]["max"], int(p * 1000)))
-                    for i, p in enumerate(positions)
-                ]
+                # Scale 0.0-1.0 → 0-1000 normalized (no clamping to hw limits;
+                # FingerUnitMode.Normalized handles the hw range mapping).
+                targets = [max(0, min(1000, int(p * 1000))) for p in positions]
+                log.info("[Hand] _handle_cmd set_all: targets=%s (raw 0-1000), hw_limits=%s",
+                         targets, self._finger_limits)
                 if self._protocol == "can":
                     await self._client.set_finger_positions(
                         self._slave_id, targets)
