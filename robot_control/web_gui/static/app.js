@@ -485,7 +485,7 @@ const KeyBindingManager = {
     "a":          "ugv.left",
     "s":          "ugv.backward",
     "d":          "ugv.right",
-    " ":          "ugv.stop",
+    " ":          "global.estop",
     "r":          "ugv.enable",
     // Motor — secondary (arrow keys)
     "arrowup":    "motor.forward",
@@ -607,7 +607,7 @@ const KeyBindingManager = {
                          fn: ()=>socket.emit("drive_stop") },
 
     "global.estop":    { type:"click", module:"global", descKey:"header.estop",
-                         fn: ()=>{ const btn=el("btn-estop"); if(btn) btn.click(); } },
+                         fn: _triggerEstop },
     "global.reboot":   { type:"click", module:"global", descKey:"header.reboot",
                          fn: ()=>_showPowerConfirm("reboot") },
     "global.shutdown": { type:"click", module:"global", descKey:"header.shutdown",
@@ -626,6 +626,8 @@ const KeyBindingManager = {
     let overrides = {};
     if (saved) { try { overrides = JSON.parse(saved); } catch(e) {} }
     this._bindings = Object.assign({}, this._defaults, overrides);
+    // Space key is ALWAYS estop — cannot be overridden by user config
+    this._bindings[" "] = "global.estop";
   },
 
   save() {
@@ -1167,7 +1169,10 @@ function _renderArmPanel(panelId, body) {
       slider.addEventListener("change", () => _sendCurrentAngles());
       if (numInp) {
         numInp.addEventListener("input", () => {
-          const v = parseFloat(numInp.value) || 0;
+          const raw = numInp.value.trim();
+          if (raw === "" || raw === "-" || raw === "." || raw === "-.") return;
+          const v = parseFloat(raw);
+          if (isNaN(v)) return;
           slider.value = Math.max(-180, Math.min(180, v));
           slider.dispatchEvent(new Event("input", { bubbles: true }));
           _armDirtyJoints.get(panelId)?.add(i);
@@ -1200,7 +1205,12 @@ function _renderArmPanel(panelId, body) {
     });
   }
 
-  el(panelId + "-arm-exec")?.addEventListener("click", () => _sendCurrentAngles());
+  const btnExec = el(panelId + "-arm-exec");
+  if (btnExec) {
+    btnExec.addEventListener("pointerdown", () => _sendCurrentAngles());
+    btnExec.addEventListener("pointerup",   () => socket.emit("arm_stop"));
+    btnExec.addEventListener("pointerleave", () => socket.emit("arm_stop"));
+  }
 
   if (slSpeed) {
     slSpeed.addEventListener("input", () => {
@@ -2541,19 +2551,26 @@ function _checkEmptyState() {
 // Emergency Stop
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function _triggerEstop() {
+  if (ACTIVE_MODULES.includes("ugv"))    socket.emit("ugv_estop");
+  if (ACTIVE_MODULES.includes("lift"))   socket.emit("lift_stop");
+  if (ACTIVE_MODULES.includes("arm"))    socket.emit("arm_stop");
+  if (ACTIVE_MODULES.includes("hand"))   socket.emit("hand_stop");
+  if (ACTIVE_MODULES.includes("motor"))  socket.emit("motor_stop");
+  if (ACTIVE_MODULES.includes("servo"))  socket.emit("servo_stop");
+  if (ACTIVE_MODULES.includes("joint"))  { socket.emit("joint_waist_stop"); socket.emit("joint_pt_stop"); }
+  if (ACTIVE_MODULES.includes("drive"))  socket.emit("drive_stop");
+  if (ACTIVE_MODULES.includes("gimbal")) socket.emit("gimbal_stop");
+  if (ACTIVE_MODULES.includes("teleop")) socket.emit("teleop_disable");
+  // Flash the physical button for visual feedback
+  const btn = el("btn-estop");
+  if (btn) { btn.classList.add("active"); setTimeout(() => btn.classList.remove("active"), 300); }
+  log("EMERGENCY STOP triggered");
+}
+
 const btnEstop = el("btn-estop");
 if (btnEstop) {
-  btnEstop.addEventListener("click", () => {
-    if (ACTIVE_MODULES.includes("ugv"))  socket.emit("ugv_estop");
-    if (ACTIVE_MODULES.includes("lift")) socket.emit("lift_stop");
-    if (ACTIVE_MODULES.includes("arm"))  socket.emit("arm_stop");
-    if (ACTIVE_MODULES.includes("hand")) socket.emit("hand_stop");
-    if (ACTIVE_MODULES.includes("motor")) socket.emit("motor_stop");
-    if (ACTIVE_MODULES.includes("servo")) socket.emit("servo_stop");
-    if (ACTIVE_MODULES.includes("joint")) { socket.emit("joint_waist_stop"); socket.emit("joint_pt_stop"); }
-    if (ACTIVE_MODULES.includes("drive")) socket.emit("drive_stop");
-    if (ACTIVE_MODULES.includes("teleop")) socket.emit("teleop_disable");
-  });
+  btnEstop.addEventListener("click", _triggerEstop);
 }
 
 // ── Power buttons ────────────────────────────────────────────────────────────

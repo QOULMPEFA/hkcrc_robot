@@ -67,6 +67,8 @@ class ArmController(RobotModule):
         self._thread: Optional[threading.Thread] = None
         self._state_thread: Optional[threading.Thread] = None
         self._logs: list[ArmLogEntry] = []
+        # Home position — set_home() overwrites this from current joint_actual_deg
+        self._home_angles: List[float] = list(self.HOME_ANGLES_DEG)
         self._collision_enabled = True
         self._joints_initialized = False
         self._payload_mass = float(cfg.get("payload_mass", 0.5))
@@ -90,6 +92,7 @@ class ArmController(RobotModule):
             "joint_temps_c": [0.0] * 6,
             "joint_voltages_v": [0.0] * 6,
             "end_effector_xyz": [0.0, 0.0, 0.0],
+            "home_angles_deg": list(self.HOME_ANGLES_DEG),
             "is_moving": False, "is_fault": False, "is_enabled": False,
             "connected": False,
             "robot_mode": "UNKNOWN", "safety_mode": "UNKNOWN", "fault_text": "",
@@ -105,6 +108,7 @@ class ArmController(RobotModule):
             "arm_reset_fault": self._on_reset_fault,
             "arm_move_joints": self._on_move_joints,
             "arm_home": self._on_home,
+            "arm_set_home": self._on_set_home,
             "arm_stop": self._on_stop,
             "arm_set_collision_sensitivity": self._on_set_collision_sensitivity,
         }
@@ -202,8 +206,20 @@ class ArmController(RobotModule):
             self._add_log("info", f"直线移动 speed={speed_pct:.0f}%")
         return ok
 
+    def set_home(self) -> bool:
+        """Capture current actual joint angles as the new home target."""
+        with self._lock:
+            actual = list(self._state.joint_actual_deg)
+        if not actual or all(a == 0.0 for a in actual):
+            log.warning("[Arm] set_home() — no actual angles available, keeping current home")
+            return False
+        self._home_angles = actual
+        log.info("[Arm] set_home() — new home: %s", [round(a, 2) for a in actual])
+        self._add_log("info", f"新回零位: {[round(a, 1) for a in actual]}")
+        return True
+
     def go_home(self) -> bool:
-        return self.move_joints(list(self.HOME_ANGLES_DEG), speed_pct=30.0)
+        return self.move_joints(list(self._home_angles), speed_pct=30.0)
 
     def stop_motion(self) -> None:
         self._dashboard_cmd("stop")
@@ -234,6 +250,7 @@ class ArmController(RobotModule):
                 "joint_temps_c": list(s.joint_temps_c),
                 "joint_voltages_v": list(s.joint_voltages_v),
                 "end_effector_xyz": list(s.end_effector_xyz),
+                "home_angles_deg": list(self._home_angles),
                 "is_moving": s.is_moving,
                 "is_fault": s.is_fault,
                 "is_enabled": s.is_enabled,
@@ -267,6 +284,9 @@ class ArmController(RobotModule):
 
     def _on_home(self, _data: dict = None, emit=None) -> None:
         self.go_home()
+
+    def _on_set_home(self, _data: dict = None, emit=None) -> None:
+        self.set_home()
 
     def _on_stop(self, _data: dict = None, emit=None) -> None:
         self.stop_motion()

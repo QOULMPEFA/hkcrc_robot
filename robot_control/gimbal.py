@@ -14,7 +14,7 @@ Usage (standalone test):
   python -m robot_control.gimbal
 
 Usage (robot system):
-  config = {"gimbal": {"yaw_limits": [-90, 90], "pitch_limits": [-90, 60]}}
+  config = {"gimbal": {"yaw_limits": [-90, 90], "pitch_limits": [-50, 60]}}
   with Robot(config) as robot: ...
 """
 
@@ -24,6 +24,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from robot_control.module_base import EmitFn, EventHandler, RobotModule
+from gimbal_sdk.gimbal_optimizer import GimbalOptimizer
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class GimbalModule(RobotModule):
 
         # angle limits (logical gimbal angles, not servo angles)
         self._yaw_limits: Tuple[float, float] = tuple(cfg.get("yaw_limits", [-90, 90]))
-        self._pitch_limits: Tuple[float, float] = tuple(cfg.get("pitch_limits", [-90, 60]))
+        self._pitch_limits: Tuple[float, float] = tuple(cfg.get("pitch_limits", [-50, 60]))
 
         # home position (configurable origin, not hardcoded 0,0)
         self._home_yaw: float = float(cfg.get("home_yaw", 0.0))
@@ -109,6 +110,9 @@ class GimbalModule(RobotModule):
         self._lock = threading.Lock()
         self._poll_thread: Optional[threading.Thread] = None
         self._running = False
+
+        # physics-based optimizer (toggleable from web GUI)
+        self._optimizer = GimbalOptimizer()
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -183,6 +187,13 @@ class GimbalModule(RobotModule):
         yaw = self._clamp_yaw(yaw)
         pitch = self._clamp_pitch(pitch)
 
+        # Apply physics-based optimizer (cross-axis decoupling, adaptive
+        # velocity, anti-oscillation damping, compound-angle power boost)
+        yaw, pitch, velocity, power = self._optimizer.optimize(
+            yaw, pitch,
+            current_yaw=self._current_yaw, current_pitch=self._current_pitch,
+            base_velocity=self._velocity, base_power=self._power)
+
         with self._lock:
             self._target_yaw = yaw
             self._target_pitch = pitch
@@ -193,12 +204,12 @@ class GimbalModule(RobotModule):
         try:
             self._controller.uservo.set_servo_angle(
                 self._ids["yaw"], s_yaw,
-                velocity=self._velocity, power=self._power)
+                velocity=velocity, power=int(power))
             self._controller.uservo.set_servo_angle(
                 self._ids["pitch"], s_pitch,
-                velocity=self._velocity, power=self._power)
-            log.info("[Gimbal] move_to yaw=%.1f° pitch=%.1f° (servo: %.1f, %.1f)",
-                     yaw, pitch, s_yaw, s_pitch)
+                velocity=velocity, power=int(power))
+            log.info("[Gimbal] move_to yaw=%.1f° pitch=%.1f° (servo: %.1f, %.1f vel=%.0f pow=%.0f)",
+                     yaw, pitch, s_yaw, s_pitch, velocity, power)
             return True
         except Exception as e:
             log.error("[Gimbal] move_to failed: %s", e)
@@ -294,6 +305,7 @@ class GimbalModule(RobotModule):
                 "rel_pitch_deg": round(self._current_pitch - self._home_pitch, 1),
                 "is_fault": self._is_fault,
                 "fault_text": self._fault_text,
+                "optimizer": self._optimizer.get_config(),
             }
 
     def get_state_schema(self) -> Dict[str, Any]:
@@ -309,6 +321,7 @@ class GimbalModule(RobotModule):
             "rel_pitch_deg": 0.0,
             "is_fault": False,
             "fault_text": "",
+            "optimizer": {"enabled": False},
         }
 
     # ── SocketIO handlers ─────────────────────────────────────────────────────
@@ -320,7 +333,12 @@ class GimbalModule(RobotModule):
             "gimbal_home": self._on_home,
             "gimbal_set_home": self._on_set_home,
             "gimbal_damping": self._on_damping,
+            "gimbal_toggle_optimizer": self._on_toggle_optimizer,
+            "gimbal_stop": self._on_stop,
         }
+
+    def _on_stop(self, _data: dict, emit: EmitFn) -> None:
+        self.emergency_stop()
 
     def _on_move_to(self, data: dict, emit: EmitFn) -> None:
         missing = self._require_keys(data, "yaw", "pitch")
@@ -348,6 +366,13 @@ class GimbalModule(RobotModule):
     def _on_damping(self, _data: dict, emit: EmitFn) -> None:
         ok = self.damping()
         emit("gimbal_move_result", {"ok": ok})
+
+    def _on_toggle_optimizer(self, data: dict, emit: EmitFn) -> None:
+        """Toggle physics-based optimizer on/off from web GUI."""
+        enabled = bool(data.get("enabled", not self._optimizer.cfg.enabled))
+        self._optimizer.cfg.enabled = enabled
+        log.info("[Gimbal] Optimizer %s", "ON" if enabled else "OFF")
+        emit("optimizer_updated", self._optimizer.get_config())
 
     # ── internals ─────────────────────────────────────────────────────────────
 
@@ -419,7 +444,7 @@ if __name__ == "__main__":
 
     module = GimbalModule({
         "yaw_limits": [-90, 90],
-        "pitch_limits": [-90, 60],
+        "pitch_limits": [-50, 60],
     })
     module.start()
 

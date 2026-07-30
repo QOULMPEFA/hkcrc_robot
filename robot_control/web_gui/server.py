@@ -150,6 +150,12 @@ def camera_stream():
     return redirect(url_for("camera_device_stream", device_name=first))
 
 
+@app.route("/vr_stream")
+def vr_stream():
+    """Minimal fullscreen MJPEG viewer optimized for Quest 3 browser."""
+    return render_template("vr_stream.html")
+
+
 # ── SRS WebRTC API proxy ────────────────────────────────────────────────────
 # Browser connects to the same origin; Flask forwards internally to SRS.
 # This avoids exposing SRS ports directly and works through FRP tunnels.
@@ -468,9 +474,6 @@ def main():
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
     )
-    # Enable debug logging for head→gimbal pipeline diagnostics
-    logging.getLogger("teleoperation_sdk.teleop").setLevel(logging.DEBUG)
-
     auth.init_db()
 
     # ── Robot config — pick the preset that matches your hardware ──────────
@@ -512,7 +515,18 @@ def main():
         "motor":  {},
         # port omitted = auto-detect RS485
         "hand":   {"protocol": "modbus", "baudrate": 460800, "slave_id": 0x7F},
-        "teleop": {"host": "192.168.56.101", "head_yaw_sign": -1, "head_yaw_gain": 1.0, "head_pitch_gain": 1.0, "head_deadband": 0.3, "head_smoothing": 0.25, "head_rate_limit": 300.0, "head_deadzone": 5.0, "head_precision": 0.5, "head_cooldown": 0.25},
+        "teleop": {
+            "host": "192.168.56.101",
+            "vr_backend": "adb",              # "adb" (USB) | "xr_protocol" (TCP) | "xrt" (WiFi)
+            "head_yaw_sign": -1,
+            "head_yaw_gain": 1.0,
+            "head_pitch_gain": 1.0,
+            "head_deadband": 0.3,
+            "head_smoothing": 0.25,
+            "head_rate_limit": 300.0,
+            "head_deadzone": 3.0,
+            "head_precision": 0.5,
+        },
         "gimbal": {},
     }
     #
