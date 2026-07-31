@@ -410,14 +410,14 @@ class GimbalModule(RobotModule):
             return None
 
     def _poll_loop(self) -> None:
-        """Background thread: read angles at ~5 Hz."""
+        """Background thread: read angles at ~5 Hz, auto-reconnect on loss."""
+        _reconnect_ticks = 0
         while self._running:
             try:
                 if self._controller and self._connected:
                     yaw = self._read_servo_angle(self._ids["yaw"])
                     pitch = self._read_servo_angle(self._ids["pitch"])
                     with self._lock:
-                        # Delta check: reject jumps > 60° (servo max 200°/s → 40°/tick at 5 Hz)
                         if yaw is not None and (self._current_yaw == 0.0 or abs(yaw - self._current_yaw) <= 60.0):
                             self._current_yaw = yaw
                         elif yaw is not None:
@@ -426,6 +426,31 @@ class GimbalModule(RobotModule):
                             self._current_pitch = pitch
                         elif pitch is not None:
                             log.debug("[Gimbal] Rejected pitch jump: %.1f → %.1f", self._current_pitch, pitch)
+                    _reconnect_ticks = 0
+                else:
+                    # Auto-reconnect — retry every ~5 s (25 ticks × 0.2 s)
+                    _reconnect_ticks += 1
+                    if _reconnect_ticks >= 25:
+                        _reconnect_ticks = 0
+                        try:
+                            from gimbal_sdk.servo_lib import ServoController
+                            self._controller = ServoController()
+                            for sid in self._ids.values():
+                                try:
+                                    self._controller.uservo.reset_multi_turn_angle(sid)
+                                except Exception:
+                                    pass
+                            self._current_yaw = self._read_servo_angle(self._ids["yaw"]) or 0.0
+                            self._current_pitch = self._read_servo_angle(self._ids["pitch"]) or 0.0
+                            self._target_yaw = self._current_yaw
+                            self._target_pitch = self._current_pitch
+                            self._connected = True
+                            self._is_fault = False
+                            self._fault_text = ""
+                            log.info("[Gimbal] Reconnected — yaw=%.1f°, pitch=%.1f°",
+                                     self._current_yaw, self._current_pitch)
+                        except Exception as e:
+                            log.debug("[Gimbal] Reconnect attempt failed: %s", e)
             except Exception as e:
                 log.debug("[Gimbal] Poll error: %s", e)
             time.sleep(0.2)
