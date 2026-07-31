@@ -839,8 +839,9 @@ function _renderCameraPanel(panelId, body) {
       <div class="camera-error" id="${panelId}-cam-err" style="display:none">${I18n.t("camera.offline")}</div>
     </div>
     <div class="cam-status-line" id="${panelId}-cam-status">${I18n.t("camera.status")}</div>
-    <div class="btn-row center" style="margin-top:6px">
+    <div class="btn-row center" style="margin-top:6px; gap:8px">
       <button class="btn-secondary" id="${panelId}-cam-reset">${I18n.t("camera.reset")}</button>
+      <button class="btn-secondary" id="${panelId}-cam-scan">${I18n.t("camera.scan")}</button>
     </div>
   `;
 
@@ -886,6 +887,20 @@ function _renderCameraPanel(panelId, body) {
       btnReset.textContent = I18n.t("camera.resetting");
       const dev = (panel && panel.dataset.camDevice) || "";
       socket.emit("camera_reset", { device: dev });
+    });
+  }
+
+  // Camera scan button (re-scan for new devices)
+  const btnScan = el(panelId + "-cam-scan");
+  if (btnScan) {
+    btnScan.addEventListener("click", () => {
+      btnScan.disabled = true;
+      btnScan.textContent = I18n.t("camera.scanning");
+      socket.emit("camera_scan");
+      setTimeout(() => {
+        btnScan.disabled = false;
+        btnScan.textContent = I18n.t("camera.scan");
+      }, 3000);
     });
   }
 

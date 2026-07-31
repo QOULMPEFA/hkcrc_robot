@@ -297,7 +297,7 @@ def _register_module_handlers(robot: Robot):
 
             wrapped = make_listener()
             # Read-only events allow viewer; everything else requires operator
-            _viewer_events = {"camera_list_devices", "settings_get"}
+            _viewer_events = {"camera_list_devices", "camera_scan", "settings_get"}
             min_role = "viewer" if event in _viewer_events else "operator"
             socketio.on_event(event, _with_role(min_role, wrapped))
         log.info("[GUI] Registered %d handler(s) for module '%s'", len(handlers), name)
@@ -511,7 +511,7 @@ def main():
         "arm":    {"host": "192.168.56.101", "payload_mass": 0.5, "payload_cog": [0.0, 0.0, 0.05]},
         "ugv":    {"host": "127.0.0.1", "port": 9100},
         "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
-        "camera": {"devices": ["/dev/video6", "/dev/video4"]},
+        "camera": {"auto_detect": True},
         "motor":  {},
         # port omitted = auto-detect RS485
         "hand":   {"protocol": "modbus", "baudrate": 460800, "slave_id": 0x7F},

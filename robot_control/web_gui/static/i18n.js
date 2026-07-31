@@ -286,6 +286,8 @@ I18n.zh["camera.status_lost"] = "信号丢失";
 I18n.zh["camera.status_stale"] = "信号延迟";
 I18n.zh["camera.status_waiting"] = "等待画面...";
 I18n.zh["camera.select_device"] = "选择设备";
+I18n.zh["camera.scan"]      = "扫描摄像头";
+I18n.zh["camera.scanning"]  = "扫描中...";
 
 I18n.en["camera.offline"]  = "Camera Offline";
 I18n.en["camera.loading"]  = "Loading...";
@@ -293,6 +295,8 @@ I18n.en["camera.status"]   = "MJPEG";
 I18n.en["camera.reset"]    = "Reset Camera";
 I18n.en["camera.resetting"] = "Resetting...";
 I18n.en["camera.reset_ok"]  = "Camera Reset OK";
+I18n.en["camera.scan"]      = "Scan Cameras";
+I18n.en["camera.scanning"]  = "Scanning...";
 I18n.en["camera.status_lost"] = "Signal Lost";
 I18n.en["camera.status_stale"] = "Stale";
 I18n.en["camera.status_waiting"] = "Waiting...";

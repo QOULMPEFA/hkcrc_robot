@@ -8,6 +8,7 @@ Streaming path:
   /dev/videoN (or tcp://...) → ffmpeg (MJPEG pipe) → /stream/<id> HTTP
 """
 
+import glob
 import logging
 import os
 import select as _select
@@ -33,10 +34,10 @@ def _detect_cameras() -> List[str]:
     and metadata-only sub-devices.
     """
     devices = []
-    for i in range(10):
-        path = f"/dev/video{i}"
-        if not os.path.exists(path):
-            continue
+    for path in sorted(glob.glob("/dev/video*")):
+        dev_name = os.path.basename(path)
+        if not os.path.exists(f"/sys/class/video4linux/{dev_name}/device"):
+            continue  # ghost node — USB device was unplugged
         checked_v4l2 = False
         try:
             info = subprocess.run(
@@ -73,7 +74,7 @@ def _detect_cameras() -> List[str]:
             continue
 
         try:
-            with open(f"/sys/class/video4linux/video{i}/name") as fh:
+            with open(f"/sys/class/video4linux/{dev_name}/name") as fh:
                 name = fh.read().strip()
             if "cedrus" not in name.lower():
                 devices.append(path)
@@ -84,8 +85,61 @@ def _detect_cameras() -> List[str]:
     return devices
 
 
+def _deduplicate_by_usb_device(devices: List[str]) -> List[str]:
+    """Pick the best RGB video node for each physical USB camera.
+
+    Groups /dev/video nodes by physical USB device, then selects the node
+    that supports YUYV or MJPG pixel formats (i.e. a real colour sensor).
+    Falls back to the first available node if no format info is available.
+    """
+    # Step 1 — group video nodes by physical USB device
+    by_usb: Dict[str, List[str]] = {}
+    for path in devices:
+        dev_name = os.path.basename(path)
+        try:
+            iface = os.path.realpath(f"/sys/class/video4linux/{dev_name}/device")
+        except OSError:
+            iface = dev_name
+        # Walk up from interface parent to find the USB device (has "authorized")
+        usb_dev = os.path.dirname(iface)
+        for _ in range(6):
+            if os.path.exists(os.path.join(usb_dev, "authorized")):
+                break
+            parent = os.path.dirname(usb_dev)
+            if parent == usb_dev:
+                break
+            usb_dev = parent
+        by_usb.setdefault(usb_dev, []).append(path)
+
+    # Step 2 — per physical device, pick the node with colour pixel formats
+    result = []
+    for usb_dev, paths in by_usb.items():
+        best = _pick_color_node(paths)
+        result.append(best)
+
+    unique = sorted(result)
+    if len(unique) < len(devices):
+        log.info("[Camera] dedup: %d video nodes → %d cameras", len(devices), len(unique))
+    return unique
+
+
+def _pick_color_node(candidates: List[str]) -> str:
+    """Return the candidate that supports YUYV or MJPG; fall back to the first."""
+    for path in candidates:
+        try:
+            info = subprocess.run(
+                ["v4l2-ctl", "-d", path, "--list-formats"],
+                capture_output=True, text=True, timeout=3,
+            )
+            out = info.stdout
+            if "MJPG" in out or "YUYV" in out or "RGB" in out:
+                return path
+        except (FileNotFoundError, subprocess.SubprocessError):
+            pass
+    return candidates[0]
+
+
 def _get_sudo_input() -> str:
-    """Return the sudo password with trailing newline from the DB setting."""
     try:
         from robot_control.web_gui import auth
         pw = auth.get_setting("sudo_password", "orangepi")
@@ -577,17 +631,21 @@ class CameraModule(RobotModule):
         self._height = int(cfg.get("height", 480))
         self._fps = int(cfg.get("fps", 30))
         self._sources: Dict[str, CameraModule.CameraSource] = {}
+        self._lock = threading.Lock()
         self._build_sources(cfg)
 
     def _build_sources(self, cfg: Dict[str, Any]) -> None:
         """Parse config dict into CameraSource instances.
 
-        Accepts three formats:
-          Explicit: {"sources": [{"id": "s0", "type": "usb", "device": "/dev/video6"}]}
-          Simple:   {"devices": ["/dev/video6", "/dev/video4"]}
-          Legacy:   {"device": "/dev/video0"}
+        Accepts:
+          auto:       {"auto_detect": true}
+          Explicit:   {"sources": [{"id": "s0", "type": "usb", "device": "/dev/video6"}]}
+          Simple:     {"devices": ["/dev/video6", "/dev/video4"]}
+          Legacy:     {"device": "/dev/video0"}
         """
-        if "sources" in cfg:
+        if cfg.get("auto_detect"):
+            self._auto_build_sources()
+        elif "sources" in cfg:
             for src_cfg in cfg["sources"]:
                 sid = src_cfg["id"]
                 stype = src_cfg.get("type", "usb")
@@ -607,6 +665,35 @@ class CameraModule(RobotModule):
         else:
             self._sources["cam0"] = CameraModule.CameraSource(
                 "cam0", "usb", "/dev/video0", self._width, self._height, self._fps)
+
+    def _auto_build_sources(self) -> None:
+        """Scan /dev/video* and create a source for each unique physical camera."""
+        detected = _detect_cameras()
+        unique = _deduplicate_by_usb_device(detected)
+        log.info("[Camera] auto-detect: %d nodes → %d cameras — %s",
+                 len(detected), len(unique), unique)
+        for i, device in enumerate(unique):
+            sid = f"cam{i}"
+            self._sources[sid] = CameraModule.CameraSource(
+                sid, "usb", device, self._width, self._height, self._fps)
+
+    def rescan(self) -> List[Dict[str, Any]]:
+        """Re-scan for cameras and start sources for newly discovered devices."""
+        detected = _detect_cameras()
+        unique = _deduplicate_by_usb_device(detected)
+        new_count = 0
+        with self._lock:
+            for i, device in enumerate(unique):
+                sid = f"cam{i}"
+                if sid not in self._sources:
+                    src = CameraModule.CameraSource(
+                        sid, "usb", device, self._width, self._height, self._fps)
+                    self._sources[sid] = src
+                    src.start()
+                    new_count += 1
+                    log.info("[Camera] rescan: added %s → %s", sid, device)
+        log.info("[Camera] rescan: %d new sources (total=%d)", new_count, len(self._sources))
+        return self.get_device_list()
 
     # ── RobotModule metadata ──────────────────────────────────────────────
 
@@ -637,10 +724,11 @@ class CameraModule(RobotModule):
     # ── aggregate state ───────────────────────────────────────────────────
 
     def get_state(self) -> Dict[str, Any]:
-        return {
-            "devices": {sid: s.get_state() for sid, s in self._sources.items()},
-            "connected": any(s._running for s in self._sources.values()),
-        }
+        with self._lock:
+            return {
+                "devices": {sid: s.get_state() for sid, s in self._sources.items()},
+                "connected": any(s._running for s in self._sources.values()),
+            }
 
     # ── dispatch API (called by server.py) ────────────────────────────────
 
@@ -663,10 +751,11 @@ class CameraModule(RobotModule):
         return sum(s.client_count() for s in self._sources.values())
 
     def get_device_list(self) -> List[Dict[str, Any]]:
-        return [
-            {"id": sid, "active": s._running, "source_type": s._type}
-            for sid, s in self._sources.items()
-        ]
+        with self._lock:
+            return [
+                {"id": sid, "active": s._running, "source_type": s._type}
+                for sid, s in self._sources.items()
+            ]
 
     # ── SocketIO handlers ─────────────────────────────────────────────────
 
@@ -674,6 +763,7 @@ class CameraModule(RobotModule):
         return {
             "camera_reset": self._handle_camera_reset,
             "camera_list_devices": self._handle_list_devices,
+            "camera_scan": self._handle_scan,
         }
 
     def _handle_camera_reset(self, data: dict, emit) -> None:
@@ -691,3 +781,8 @@ class CameraModule(RobotModule):
 
     def _handle_list_devices(self, _data: dict, emit) -> None:
         emit("camera_device_list", {"devices": self.get_device_list()})
+
+    def _handle_scan(self, _data: dict, emit) -> None:
+        log.info("[Camera] manual rescan requested from GUI")
+        devices = self.rescan()
+        emit("camera_device_list", {"devices": devices})
