@@ -909,7 +909,7 @@ class CameraModule(RobotModule):
 
         def __init__(self, source_id: str, device: str,
                      width: int, height: int, fps: int):
-            super().__init__(source_id, "orbbec", device, width, height, fps)
+            super().__init__(source_id, "usb", device, width, height, fps)
             self._mode = "color"
             self._ob_pipeline = None
 
@@ -1050,7 +1050,6 @@ class CameraModule(RobotModule):
                 return
             log.info("[Camera:%s] Orbbec pipeline reset (mode=%s)", self._id, self._mode)
             self._kill_ffmpeg()
-            self._start_ffmpeg()
 
         def _cycle_device(self) -> None:
             self._reset_usb()
