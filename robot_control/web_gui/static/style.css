@@ -681,6 +681,41 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   outline: 1px solid var(--accent);
 }
 
+.cam-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.cam-mode-btns {
+  display: flex;
+  gap: 2px;
+  background: #1e2038;
+  border-radius: 6px;
+  padding: 2px;
+}
+.cam-mode-btn {
+  padding: 3px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cam-mode-btn:hover {
+  color: #ccc;
+}
+.cam-mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+.cam-mode-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── footer ──────────────────────────────────────────────────────────────── */
 footer {
   text-align: center;

@@ -40,13 +40,7 @@ from robot_control.module_base import RobotModule
 
 log = logging.getLogger(__name__)
 
-# Lazy import — gracefully degrade if SDK not installed
-try:
-    import xrobotoolkit_sdk as xrt
-    _XRT_AVAILABLE = True
-except ImportError:
-    xrt = None
-    _XRT_AVAILABLE = False
+from teleoperation_sdk.vr_backends import VRBackend, create_vr_backend
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
@@ -111,6 +105,10 @@ class TeleopModule(RobotModule):
         self._arm_controller = cfg.get("arm_controller", "right")
         self._ws_min = cfg.get("workspace_min_xyz", DEFAULT_WORKSPACE_MIN)
         self._ws_max = cfg.get("workspace_max_xyz", DEFAULT_WORKSPACE_MAX)
+
+        # VR backend selection: "xrt" (WiFi) | "adb" (USB) | "xr_protocol" (TCP)
+        self._vr_backend_name = cfg.get("vr_backend", "xrt")
+        self._vr_backend: Optional[VRBackend] = None
 
         # Head tracking → gimbal config
         self._head_to_gimbal_enabled = cfg.get("head_to_gimbal", False)
@@ -183,6 +181,10 @@ class TeleopModule(RobotModule):
         self._data_log_enabled = False
         self._data_log: List[Dict] = []
 
+        # UR5e status push (for XRProtocolBackend bidirectional comms)
+        self._status_push_thread: Optional[threading.Thread] = None
+        self._status_push_running = False
+
         # Background thread
         self._thread: Optional[threading.Thread] = None
 
@@ -200,6 +202,7 @@ class TeleopModule(RobotModule):
         return {
             "connected": False,
             "xr_initialized": False,
+            "vr_backend": "xrt",
             "active": False,
             "tracking": False,
             "calibrated": False,
@@ -235,6 +238,7 @@ class TeleopModule(RobotModule):
             return {
                 "connected": self._connected,
                 "xr_initialized": self._xr_initialized,
+                "vr_backend": self._vr_backend_name,
                 "active": self._active,
                 "tracking": self._tracking,
                 "calibrated": self._calibrated,
@@ -284,21 +288,31 @@ class TeleopModule(RobotModule):
     # ── lifecycle ──────────────────────────────────────────────────────────
 
     def start(self) -> None:
-        if not _XRT_AVAILABLE:
-            log.warning("[Teleop] xrobotoolkit_sdk not available — stub mode")
+        self._vr_backend = create_vr_backend(self._vr_backend_name)
+        if self._vr_backend is None:
+            log.warning("[Teleop] Unknown vr_backend '%s' — stub mode", self._vr_backend_name)
             self._connected = False
             return
 
-        try:
-            xrt.init()
-            self._xr_initialized = True
-            self._connected = True
-            log.info("[Teleop] XR SDK initialized")
-        except Exception as e:
-            log.error("[Teleop] XR SDK init failed: %s", e)
-            self._xr_initialized = False
+        if not self._vr_backend.init():
+            log.warning("[Teleop] VR backend '%s' init failed — stub mode", self._vr_backend_name)
             self._connected = False
             return
+
+        self._xr_initialized = True
+        self._connected = True
+        log.info("[Teleop] VR backend '%s' initialized", self._vr_backend_name)
+
+        # Register bidirectional command callback (XRProtocolBackend)
+        if hasattr(self._vr_backend, 'set_command_callback'):
+            self._vr_backend.set_command_callback(self._on_vr_command)
+
+        # Start status push thread for bidirectional backends
+        if hasattr(self._vr_backend, 'send_ur5e_status'):
+            self._status_push_running = True
+            self._status_push_thread = threading.Thread(
+                target=self._status_push_loop, daemon=True, name="teleop-status")
+            self._status_push_thread.start()
 
         self._running = True
         self._thread = threading.Thread(target=self._control_loop, daemon=True, name="teleop-ctrl")
@@ -307,22 +321,26 @@ class TeleopModule(RobotModule):
 
     def stop(self) -> None:
         self._running = False
+        self._status_push_running = False
         if self._active:
             self._send_urscript("stopj(2.0)\n")
             self._gating(False)
 
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
+        if self._status_push_thread and self._status_push_thread.is_alive():
+            self._status_push_thread.join(timeout=2.0)
 
         self._disconnect_ur()
 
-        if self._xr_initialized:
+        if self._vr_backend is not None:
             try:
-                xrt.close()
+                self._vr_backend.close()
             except Exception:
                 pass
-            self._xr_initialized = False
+            self._vr_backend = None
 
+        self._xr_initialized = False
         self._connected = False
         self._active = False
         self._tracking = False
@@ -344,7 +362,7 @@ class TeleopModule(RobotModule):
     def _on_enable(self, _data: dict = None, emit=None) -> None:
         if not self._xr_initialized:
             if emit:
-                emit("error", {"msg": "XR SDK not initialized"})
+                emit("error", {"msg": "VR backend not initialized"})
             return
         if self._is_fault:
             if emit:
@@ -366,17 +384,14 @@ class TeleopModule(RobotModule):
 
     def _on_calibrate(self, _data: dict = None, emit=None) -> None:
         """Record current controller pose as reference offset to current arm position."""
-        if not self._xr_initialized:
+        if self._vr_backend is None:
             if emit:
-                emit("error", {"msg": "XR SDK not initialized"})
+                emit("error", {"msg": "VR backend not initialized"})
             return
 
         # Read current controller pose
         try:
-            if self._arm_controller == "left":
-                ctrl = xrt.get_left_controller_pose()
-            else:
-                ctrl = xrt.get_right_controller_pose()
+            ctrl = self._vr_backend.get_controller_pose(self._arm_controller)
         except Exception as e:
             log.warning("[Teleop] Calibrate: failed to read controller: %s", e)
             return
@@ -410,7 +425,7 @@ class TeleopModule(RobotModule):
     def _on_gimbal_track_enable(self, _data: dict = None, emit=None) -> None:
         if not self._xr_initialized:
             if emit:
-                emit("error", {"msg": "XR SDK not initialized"})
+                emit("error", {"msg": "VR backend not initialized"})
             return
         # Probe head pose availability (first successful read sets _head_pose_available)
         head = self._read_head_pose()
@@ -439,7 +454,7 @@ class TeleopModule(RobotModule):
         """Record current head orientation as the gimbal reference offset."""
         if not self._xr_initialized:
             if emit:
-                emit("error", {"msg": "XR SDK not initialized"})
+                emit("error", {"msg": "VR backend not initialized"})
             return
         head = self._read_head_pose()
         if head is None:
@@ -534,18 +549,94 @@ class TeleopModule(RobotModule):
                 "head_cooldown": self._head_cooldown,
             })
 
+    # ── VR command callback (Quest → Python bidirectional) ─────────────────
+
+    def _on_vr_command(self, function_name: str, value: dict) -> None:
+        """Handle function messages from Quest (non-Tracking)."""
+        log.info("[Teleop] VR command: %s %s", function_name, value)
+
+        if function_name == "UR5eControl":
+            action = value.get("action", "")
+            if action == "connect":
+                self._handle_ur5e_connect(value)
+            elif action == "disconnect":
+                self._handle_ur5e_disconnect()
+            elif action == "emergency_stop":
+                self.emergency_stop()
+            elif action == "get_status":
+                self._push_ur5e_status()
+            else:
+                log.warning("[Teleop] Unknown UR5e action: %s", action)
+
+    def _handle_ur5e_connect(self, params: dict) -> None:
+        """Handle UR5e connect request from Quest."""
+        new_host = params.get("ip", self._ur_host)
+        self._ur_host = new_host
+        self._disconnect_ur()
+        ok = self._connect_ur()
+        if ok:
+            log.info("[Teleop] UR5e connected to %s (from Quest command)", new_host)
+            self._push_ur5e_status()
+        else:
+            log.warning("[Teleop] UR5e connect failed to %s", new_host)
+            self._push_ur5e_status()
+
+    def _handle_ur5e_disconnect(self) -> None:
+        """Handle UR5e disconnect request from Quest."""
+        with self._lock:
+            self._active = False
+            self._tracking = False
+        self._send_urscript("stopj(2.0)\n")
+        self._gating(False)
+        self._disconnect_ur()
+        log.info("[Teleop] UR5e disconnected (from Quest command)")
+        self._push_ur5e_status()
+
+    def _status_push_loop(self) -> None:
+        """Periodically push UR5e status to Quest (every 500ms)."""
+        while self._status_push_running:
+            time.sleep(0.5)
+            if not self._status_push_running:
+                break
+            self._push_ur5e_status()
+
+    def _push_ur5e_status(self) -> None:
+        """Send current UR5e status to the Quest client."""
+        if not hasattr(self._vr_backend, 'send_ur5e_status'):
+            return
+        try:
+            self._vr_backend.send_ur5e_status(self.get_ur5e_status())
+        except Exception as e:
+            log.debug("[Teleop] Status push failed: %s", e)
+
+    def get_ur5e_status(self) -> Dict[str, Any]:
+        """Return UR5e robot status for Quest display."""
+        with self._lock:
+            return {
+                "connected": self._connected,
+                "ur_connected": self._ur_sock is not None,
+                "active": self._active,
+                "tracking": self._tracking,
+                "calibrated": self._calibrated,
+                "is_fault": self._is_fault,
+                "fault_text": self._fault_text,
+                "current_joints_deg": list(self._current_joints_deg),
+                "target_joints_deg": list(self._target_joints_deg),
+                "trigger_value": self._trigger_val,
+                "grip_pressed": self._grip_pressed,
+            }
+
     # ── head tracking ──────────────────────────────────────────────────────
 
     def _read_head_pose(self) -> Optional[List[float]]:
         """Read Quest 3 headset pose. Returns [x, y, z, qx, qy, qz, qw] or None."""
-        if not self._xr_initialized:
+        if self._vr_backend is None:
             return None
         try:
-            if hasattr(xrt, 'get_headset_pose'):
-                pose = xrt.get_headset_pose()
-                if pose is not None and len(pose) >= 7:
-                    self._head_pose_available = True
-                    return [float(v) for v in pose[:7]]
+            pose = self._vr_backend.get_headset_pose()
+            if pose is not None and len(pose) >= 7:
+                self._head_pose_available = True
+                return [float(v) for v in pose[:7]]
         except Exception as e:
             log.debug("[Teleop] Head pose read failed: %s", e)
         return None
@@ -725,30 +816,24 @@ class TeleopModule(RobotModule):
 
     def _read_controller(self) -> None:
         """Read XR controller state into cached fields."""
+        if self._vr_backend is None:
+            return
         try:
-            get_pose = xrt.get_left_controller_pose if self._arm_controller == "left" \
-                else xrt.get_right_controller_pose
-            get_trigger = xrt.get_left_trigger if self._arm_controller == "left" \
-                else xrt.get_right_trigger
-            get_grip = xrt.get_left_grip if self._arm_controller == "left" \
-                else xrt.get_right_grip
-
-            pose = get_pose()
+            pose = self._vr_backend.get_controller_pose(self._arm_controller)
             if pose is not None and len(pose) >= 7:
                 with self._lock:
                     self._ctrl_pos = [float(pose[0]), float(pose[1]), float(pose[2])]
-            # quaternion: pose[3..6]
 
-            trigger = get_trigger()
+            trigger = self._vr_backend.get_trigger(self._arm_controller)
             with self._lock:
                 self._trigger_val = float(trigger) if trigger is not None else 0.0
 
-            grip = get_grip()
+            grip = self._vr_backend.get_grip(self._arm_controller)
             with self._lock:
                 self._grip_pressed = bool(grip)
 
-            a_btn = xrt.get_A_button()
-            b_btn = xrt.get_B_button()
+            a_btn = self._vr_backend.get_button(self._arm_controller, "primaryButton")
+            b_btn = self._vr_backend.get_button(self._arm_controller, "secondaryButton")
             with self._lock:
                 self._button_a = bool(a_btn)
                 self._button_b = bool(b_btn)

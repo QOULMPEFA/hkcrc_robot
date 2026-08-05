@@ -19,12 +19,13 @@ Usage (robot system):
 """
 
 import logging
+import math
+import serial
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from robot_control.module_base import EmitFn, EventHandler, RobotModule
-from gimbal_sdk.gimbal_optimizer import GimbalOptimizer
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +61,10 @@ def _invert_calibration(servo_angle: float, K: float, B: float) -> float:
 DEFAULT_YAW_CAL = [(90.0, 90.4), (-90.0, -90.0)]
 DEFAULT_PITCH_CAL = [(0.0, -2.4), (-90.0, -92.6)]
 
+# ── cross-axis feedforward (sin²β coupling from eq 7 in guide/两轴云台平衡原理.md) ──
+
+_CROSS_K_DEFAULT = 0.15  # pitch gain boost from yaw sin²β
+
 
 class GimbalModule(RobotModule):
     """2-axis camera gimbal module using Fashion Star UART servos.
@@ -90,6 +95,10 @@ class GimbalModule(RobotModule):
         self._velocity = cfg.get("velocity", 200)    # deg/s
         self._power = cfg.get("power", 3000)          # mW
 
+        # cross-axis feedforward (toggleable from web GUI)
+        self._cross_axis_enabled = cfg.get("cross_axis_enabled", True)
+        self._cross_k = float(cfg.get("cross_k", _CROSS_K_DEFAULT))
+
         # calibration
         yaw_cal = cfg.get("calibration", {}).get("yaw", DEFAULT_YAW_CAL)
         pitch_cal = cfg.get("calibration", {}).get("pitch", DEFAULT_PITCH_CAL)
@@ -110,9 +119,6 @@ class GimbalModule(RobotModule):
         self._lock = threading.Lock()
         self._poll_thread: Optional[threading.Thread] = None
         self._running = False
-
-        # physics-based optimizer (toggleable from web GUI)
-        self._optimizer = GimbalOptimizer()
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -187,12 +193,13 @@ class GimbalModule(RobotModule):
         yaw = self._clamp_yaw(yaw)
         pitch = self._clamp_pitch(pitch)
 
-        # Apply physics-based optimizer (cross-axis decoupling, adaptive
-        # velocity, anti-oscillation damping, compound-angle power boost)
-        yaw, pitch, velocity, power = self._optimizer.optimize(
-            yaw, pitch,
-            current_yaw=self._current_yaw, current_pitch=self._current_pitch,
-            base_velocity=self._velocity, base_power=self._power)
+        # Cross-axis feedforward: compensate sin²β coupling (eq 7)
+        # When yaw ≠ 0°, effective inertia on pitch axis increases.
+        # Boost pitch command to offset the extra load.
+        if self._cross_axis_enabled:
+            yaw_rad = math.radians(self._current_yaw)
+            pitch_factor = 1.0 + self._cross_k * math.sin(yaw_rad) ** 2
+            pitch = pitch * pitch_factor
 
         with self._lock:
             self._target_yaw = yaw
@@ -204,13 +211,19 @@ class GimbalModule(RobotModule):
         try:
             self._controller.uservo.set_servo_angle(
                 self._ids["yaw"], s_yaw,
-                velocity=velocity, power=int(power))
+                velocity=self._velocity, power=self._power)
             self._controller.uservo.set_servo_angle(
                 self._ids["pitch"], s_pitch,
-                velocity=velocity, power=int(power))
-            log.info("[Gimbal] move_to yaw=%.1f° pitch=%.1f° (servo: %.1f, %.1f vel=%.0f pow=%.0f)",
-                     yaw, pitch, s_yaw, s_pitch, velocity, power)
+                velocity=self._velocity, power=self._power)
+            log.info("[Gimbal] move_to yaw=%.1f° pitch=%.1f° (servo: %.1f, %.1f vel=%d pow=%d)",
+                     yaw, pitch, s_yaw, s_pitch, self._velocity, self._power)
             return True
+        except serial.SerialException as e:
+            log.error("[Gimbal] move_to serial error: %s", e)
+            self._connected = False
+            self._is_fault = True
+            self._fault_text = "serial_disconnected"
+            return False
         except Exception as e:
             log.error("[Gimbal] move_to failed: %s", e)
             self._is_fault = True
@@ -305,7 +318,10 @@ class GimbalModule(RobotModule):
                 "rel_pitch_deg": round(self._current_pitch - self._home_pitch, 1),
                 "is_fault": self._is_fault,
                 "fault_text": self._fault_text,
-                "optimizer": self._optimizer.get_config(),
+                "optimizer": {
+                    "enabled": self._cross_axis_enabled,
+                    "cross_k": self._cross_k,
+                },
             }
 
     def get_state_schema(self) -> Dict[str, Any]:
@@ -368,11 +384,15 @@ class GimbalModule(RobotModule):
         emit("gimbal_move_result", {"ok": ok})
 
     def _on_toggle_optimizer(self, data: dict, emit: EmitFn) -> None:
-        """Toggle physics-based optimizer on/off from web GUI."""
-        enabled = bool(data.get("enabled", not self._optimizer.cfg.enabled))
-        self._optimizer.cfg.enabled = enabled
-        log.info("[Gimbal] Optimizer %s", "ON" if enabled else "OFF")
-        emit("optimizer_updated", self._optimizer.get_config())
+        """Toggle cross-axis feedforward on/off from web GUI."""
+        enabled = bool(data.get("enabled", not self._cross_axis_enabled))
+        self._cross_axis_enabled = enabled
+        log.info("[Gimbal] Cross-axis feedforward %s (k=%.2f)",
+                 "ON" if enabled else "OFF", self._cross_k)
+        emit("optimizer_updated", {
+            "enabled": self._cross_axis_enabled,
+            "cross_k": self._cross_k,
+        })
 
     # ── internals ─────────────────────────────────────────────────────────────
 
@@ -406,27 +426,51 @@ class GimbalModule(RobotModule):
                           servo_id, raw, angle, lo, hi)
                 return None
             return angle
+        except serial.SerialException:
+            # Device unplugged / USB port changed — mark for auto-reconnect
+            self._connected = False
+            self._is_fault = True
+            self._fault_text = "serial_disconnected"
+            log.warning("[Gimbal] Serial disconnected (servo %d) — marking for reconnect", servo_id)
+            return None
         except Exception:
             return None
 
     def _poll_loop(self) -> None:
-        """Background thread: read angles at ~5 Hz, auto-reconnect on loss."""
+        """Background thread: read angles at ~5 Hz, auto-reconnect on loss.
+
+        If the serial device is unplugged or the USB port changes, servo reads
+        fail. After N consecutive failed reads (both axes) we mark the module
+        disconnected so the reconnect branch re-detects the CH340 port.
+        """
         _reconnect_ticks = 0
+        _fail_ticks = 0
         while self._running:
             try:
                 if self._controller and self._connected:
                     yaw = self._read_servo_angle(self._ids["yaw"])
                     pitch = self._read_servo_angle(self._ids["pitch"])
-                    with self._lock:
-                        if yaw is not None and (self._current_yaw == 0.0 or abs(yaw - self._current_yaw) <= 60.0):
-                            self._current_yaw = yaw
-                        elif yaw is not None:
-                            log.debug("[Gimbal] Rejected yaw jump: %.1f → %.1f", self._current_yaw, yaw)
-                        if pitch is not None and (self._current_pitch == 0.0 or abs(pitch - self._current_pitch) <= 60.0):
-                            self._current_pitch = pitch
-                        elif pitch is not None:
-                            log.debug("[Gimbal] Rejected pitch jump: %.1f → %.1f", self._current_pitch, pitch)
-                    _reconnect_ticks = 0
+                    if yaw is None and pitch is None:
+                        _fail_ticks += 1
+                        # ~2 s of total read failure => treat as disconnected
+                        if _fail_ticks >= 10:
+                            log.warning("[Gimbal] Servo reads failing — marking disconnected for auto-reconnect")
+                            self._connected = False
+                            self._is_fault = True
+                            self._fault_text = "no_servo_response"
+                            _fail_ticks = 0
+                    else:
+                        _fail_ticks = 0
+                        with self._lock:
+                            if yaw is not None and (self._current_yaw == 0.0 or abs(yaw - self._current_yaw) <= 60.0):
+                                self._current_yaw = yaw
+                            elif yaw is not None:
+                                log.debug("[Gimbal] Rejected yaw jump: %.1f → %.1f", self._current_yaw, yaw)
+                            if pitch is not None and (self._current_pitch == 0.0 or abs(pitch - self._current_pitch) <= 60.0):
+                                self._current_pitch = pitch
+                            elif pitch is not None:
+                                log.debug("[Gimbal] Rejected pitch jump: %.1f → %.1f", self._current_pitch, pitch)
+                        _reconnect_ticks = 0
                 else:
                     # Auto-reconnect — retry every ~5 s (25 ticks × 0.2 s)
                     _reconnect_ticks += 1

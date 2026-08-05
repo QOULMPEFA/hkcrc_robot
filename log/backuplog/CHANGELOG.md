@@ -1,7 +1,53 @@
 # Changelog — PipeRobot 机器人控制系统
 
-> 涵盖时间：2026-06-02 → 2026-07-30
-> 版本范围：v1.0 → v1.21
+> 涵盖时间：2026-06-02 → 2026-07-31
+> 版本范围：v1.0 → v1.23
+
+---
+
+## v1.23 (2026-07-31) — 摄像头自动检测 + 云台自动重连
+
+### 摄像头自动检测系统
+- **自动扫描**: 启动时扫描 `/dev/video*` 自动发现所有物理摄像头，配置简化为 `"auto_detect": true`
+- **幽灵节点过滤**: 检查 `/sys/class/video4linux/*/device` 是否存在，跳过已断开 USB 设备的残留节点
+- **USB 设备级去重**: 通过 sysfs 树将多个 `/dev/video*` 节点归组到同一物理 USB 设备
+- **RGB/Depth 甄别**: `v4l2-ctl --list-formats` 检查像素格式，优先选择 YUYV/MJPG/RGB 颜色源，过滤 Y16/Z16 深度节点
+- **Metadata 过滤**: `v4l2-ctl --info` Device Caps bit 0 排除 Metadata Capture 节点
+- **Web GUI**: 新增"扫描摄像头"按钮，支持热插拔检测，中英文 i18n
+- **线程安全**: `threading.Lock()` 保护 `_sources` 并发访问
+
+### 云台电机自动重连
+- CH340 串口舵机控制器掉电后自动恢复：`_poll_loop()` 每 ~5s 重试连接
+- 重连成功后自动同步当前舵机角度
+
+### 涉及文件
+- `robot_control/camera.py` — 自动检测、去重、深度过滤、热插拔扫描
+- `robot_control/gimbal.py` — 掉电自动重连
+- `robot_control/web_gui/server.py` — auto_detect 配置 + camera_scan 事件
+- `robot_control/web_gui/static/app.js` — 扫描按钮
+- `robot_control/web_gui/static/i18n.js` — 翻译
+
+---
+
+## v1.22 (2026-07-30) — 急停按键 + 机械臂执行优化
+
+### Space 键 → 全局急停
+- Space 键绑定从 `ugv.stop` 改为 `global.estop`，KeyBindings 系统强制覆盖
+- 移除冗余的全局 keydown 监听器，统一由 KeyBindings 处理
+
+### 机械臂 Execute 按钮 — 按住移动
+- 改为按住发射指令 + 松开停止，与回零按钮交互一致
+- 避免高频重复发送 movej 导致轨迹反复重规划而移动缓慢
+
+### 负数输入修复
+- 角度输入框输入 `-` 时不再被 `parseFloat` 返 `NaN → 0` 清零
+- 中间状态（`-`、`.`、`-.`）跳过同步
+
+### 涉及文件
+- `robot_control/gimbal.py` — 新增 gimbal_stop 事件
+- `robot_control/web_gui/static/app.js` — KeyBindings, Execute 按钮, 负数输入
+- `robot_control/web_gui/templates/index.html` — cache v→11
+- `robot_encrypted/robot_control/web_gui/templates/index.html` — cache v→11
 
 ---
 
@@ -295,6 +341,7 @@
 
 | 版本 | 日期 | 关键变更 |
 |------|------|----------|
+| v1.23 | 07-31 | 摄像头自动检测 + 云台自动重连 |
 | v1.20 | 07-29 | 目标角度量化消抖（最终层） |
 | v1.19 | 07-29 | 迟滞死区 |
 | v1.18 | 07-29 | 速率限制器 + 宽范围滑块 |
@@ -327,4 +374,4 @@
 
 ---
 
-*最后更新: 2026-07-29 — Generated from 22 session/backup logs*
+*最后更新: 2026-07-31 — Generated from 23 session/backup logs*

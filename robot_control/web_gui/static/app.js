@@ -834,6 +834,14 @@ function _renderCameraPanel(panelId, body) {
         <option value="">-- ${I18n.t("camera.select_device")} --</option>
       </select>
     </div>
+    <div class="cam-mode-row" id="${panelId}-cam-mode-row" style="display:none">
+      <label class="cam-device-label">${I18n.t("camera.mode_label")}</label>
+      <div class="cam-mode-btns">
+        <button class="cam-mode-btn active" data-mode="color">${I18n.t("camera.mode_color")}</button>
+        <button class="cam-mode-btn" data-mode="stereo">${I18n.t("camera.mode_stereo")}</button>
+        <button class="cam-mode-btn" data-mode="depth">${I18n.t("camera.mode_depth")}</button>
+      </div>
+    </div>
     <div class="camera-wrap" id="${panelId}-cam-wrap">
       <img id="${panelId}-cam-img" src="" alt="camera" style="display:none" />
       <div class="camera-error" id="${panelId}-cam-err" style="display:none">${I18n.t("camera.offline")}</div>
@@ -848,17 +856,19 @@ function _renderCameraPanel(panelId, body) {
   const deviceSel = el(panelId + "-cam-device");
   const img = el(panelId + "-cam-img");
   const err = el(panelId + "-cam-err");
+  const modeRow = el(panelId + "-cam-mode-row");
 
   // Restore device from dataset if set during layout restore
   if (panel && panel.dataset.camDevice) {
     deviceSel.value = panel.dataset.camDevice;
   }
 
-  // Device selection → update img src
+  // Device selection → update img src and mode row visibility
   if (deviceSel) {
     deviceSel.addEventListener("change", () => {
       const dev = deviceSel.value;
       if (panel) panel.dataset.camDevice = dev;
+      _updateCameraModeRow(panelId, dev);
       if (dev) {
         // Clear first to force browser to close old MJPEG connection
         img.src = "";
@@ -877,6 +887,23 @@ function _renderCameraPanel(panelId, body) {
   if (img) {
     img.addEventListener("error", () => { img.style.display = "none"; if (err) err.style.display = "flex"; });
     img.addEventListener("load", () => { img.style.display = "block"; if (err) err.style.display = "none"; });
+  }
+
+  // Mode button click handlers
+  if (modeRow) {
+    modeRow.querySelectorAll(".cam-mode-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        if (btn.classList.contains("active")) return;
+        const mode = btn.dataset.mode;
+        const dev = (panel && panel.dataset.camDevice) || "";
+        if (!dev) return;
+        // Set active immediately for responsive UI; server will confirm
+        modeRow.querySelectorAll(".cam-mode-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        btn.disabled = true;
+        socket.emit("camera_set_mode", { device: dev, mode: mode });
+      });
+    });
   }
 
   // Camera reset button (per-device)
@@ -911,6 +938,53 @@ function _renderCameraPanel(panelId, body) {
   // Also request via SocketIO for live updates
   socket.emit("camera_list_devices");
 }
+
+// Update mode row visibility and active state for the selected device
+function _updateCameraModeRow(panelId, deviceId) {
+  const modeRow = el(panelId + "-cam-mode-row");
+  if (!modeRow) return;
+
+  // Find device info from cached device list
+  const allPanels = PanelManager._panels;
+  let cameraMode = null;
+  if (allPanels && window._cameraDevices) {
+    const devInfo = window._cameraDevices.find(d => d.id === deviceId);
+    if (devInfo && devInfo.camera_mode) {
+      cameraMode = devInfo.camera_mode;
+    }
+  }
+
+  if (cameraMode) {
+    modeRow.style.display = "flex";
+    modeRow.querySelectorAll(".cam-mode-btn").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.mode === cameraMode);
+      btn.disabled = false;
+    });
+  } else {
+    modeRow.style.display = "none";
+  }
+}
+
+// Handle mode switch result
+socket.on("camera_mode_result", (data) => {
+  if (data && data.ok) {
+    // Update mode buttons across all panels viewing this device
+    PanelManager._panels.forEach((p, panelId) => {
+      if (p.module !== "camera") return;
+      const panel = document.getElementById(panelId);
+      const panelDevice = panel ? (panel.dataset.camDevice || "") : "";
+      if (panelDevice === data.device) {
+        const modeRow = el(panelId + "-cam-mode-row");
+        if (modeRow) {
+          modeRow.querySelectorAll(".cam-mode-btn").forEach(btn => {
+            btn.classList.toggle("active", btn.dataset.mode === data.mode);
+            btn.disabled = false;
+          });
+        }
+      }
+    });
+  }
+});
 
 // ── UGV Panel ─────────────────────────────────────────────────────────────────
 
@@ -1714,6 +1788,7 @@ socket.on("camera_reset_result", (data) => {
 });
 
 function _populateCameraDropdowns(devices) {
+  window._cameraDevices = devices;
   PanelManager._panels.forEach((p, panelId) => {
     if (p.module !== "camera") return;
     const sel = el(panelId + "-cam-device");
@@ -1723,9 +1798,8 @@ function _populateCameraDropdowns(devices) {
     devices.forEach((d) => {
       const opt = document.createElement("option");
       opt.value = d.id;
-      let label = d.id;
+      let label = d.device_name || d.id;
       if (d.active) label += " ✓";
-      if (d.streaming) label += " ⚬";
       opt.textContent = label;
       sel.appendChild(opt);
     });
@@ -1738,6 +1812,9 @@ function _populateCameraDropdowns(devices) {
         sel.dispatchEvent(new Event("change"));
       }
     }
+    // Update mode row visibility for current selection
+    const actualVal = sel.value;
+    if (actualVal) _updateCameraModeRow(panelId, actualVal);
   });
 }
 
@@ -1916,53 +1993,6 @@ function _renderTeleopPanel(panelId, body) {
       <div><b>${t("teleop.gimbal_head_yaw")}:</b> <span id="${panelId}-tl-head-yaw">0.0</span>°
            <b style="margin-left:8px">${t("teleop.gimbal_head_pitch")}:</b> <span id="${panelId}-tl-head-pitch">0.0</span>°</div>
     </div>
-    <div style="font-size:12px;margin-bottom:2px">
-      <span><b>${t("teleop.gimbal_deadzone")}:</b>
-        <input type="range" id="${panelId}-tl-deadzone" min="0.5" max="15" step="0.5" value="3.0"
-               style="width:60px;vertical-align:middle">
-        <input type="number" id="${panelId}-tl-deadzone-num" min="0.5" max="15" step="0.5" value="3.0"
-               style="width:44px;font-size:11px">°</span>
-      <span style="margin-left:8px"><b>${t("teleop.gimbal_deadband")}:</b>
-        <input type="range" id="${panelId}-tl-deadband" min="0.02" max="2.0" step="0.02" value="0.30"
-               style="width:55px;vertical-align:middle">
-        <input type="number" id="${panelId}-tl-deadband-num" min="0.02" max="2.0" step="0.02" value="0.30"
-               style="width:44px;font-size:11px">°</span>
-    </div>
-    <div style="font-size:12px;margin-bottom:2px">
-      <span><b>${t("teleop.gimbal_smoothing")}:</b>
-        <input type="range" id="${panelId}-tl-smoothing" min="0.02" max="1.0" step="0.02" value="0.25"
-               style="width:55px;vertical-align:middle">
-        <input type="number" id="${panelId}-tl-smoothing-num" min="0.02" max="1.0" step="0.02" value="0.25"
-               style="width:44px;font-size:11px"></span>
-      <span style="margin-left:4px"><b>${t("teleop.gimbal_precision")}:</b>
-        <input type="range" id="${panelId}-tl-precision" min="0.1" max="2.0" step="0.1" value="0.5"
-               style="width:50px;vertical-align:middle">
-        <input type="number" id="${panelId}-tl-precision-num" min="0.1" max="2.0" step="0.1" value="0.5"
-               style="width:42px;font-size:11px">°</span>
-    </div>
-    <div style="font-size:12px;margin-bottom:2px">
-      <span><b>${t("teleop.gimbal_rate_limit")}:</b>
-        <input type="range" id="${panelId}-tl-rate-limit" min="5" max="500" step="5" value="300"
-               style="width:60px;vertical-align:middle">
-        <input type="number" id="${panelId}-tl-rate-limit-num" min="5" max="500" step="5" value="300"
-               style="width:48px;font-size:11px">°/s</span>
-    </div>
-    <div style="font-size:12px;margin-bottom:2px;margin-top:6px;border-top:1px solid var(--border);padding-top:4px">
-      <b>${t("teleop.gimbal_sensitivity_label")}</b>
-    </div>
-    <div style="font-size:12px;margin-bottom:4px">
-      <span><b>${t("teleop.gimbal_yaw_gain")}:</b>
-        <input type="range" id="${panelId}-tl-yaw-gain" min="0.1" max="3.0" step="0.05" value="1.0"
-               style="width:60px;vertical-align:middle">
-        <input type="number" id="${panelId}-tl-yaw-gain-num" min="0.1" max="3.0" step="0.05" value="1.0"
-               style="width:48px;font-size:11px">×</span>
-      <span style="margin-left:12px"><b>${t("teleop.gimbal_pitch_gain")}:</b>
-        <input type="range" id="${panelId}-tl-pitch-gain" min="0.1" max="3.0" step="0.05" value="1.0"
-               style="width:60px;vertical-align:middle">
-        <input type="number" id="${panelId}-tl-pitch-gain-num" min="0.1" max="3.0" step="0.05" value="1.0"
-               style="width:48px;font-size:11px">×</span>
-      <button class="btn-primary ctrl" id="${panelId}-tl-apply-config" style="font-size:11px;margin-left:8px">${t("teleop.gimbal_apply_config")}</button>
-    </div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:6px">
       ${t("teleop.gimbal_limits")}: Yaw [<span id="${panelId}-tl-yaw-limit-lo">-90</span>, <span id="${panelId}-tl-yaw-limit-hi">90</span>]°
       Pitch [<span id="${panelId}-tl-pitch-limit-lo">-50</span>, <span id="${panelId}-tl-pitch-limit-hi">60</span>]°
@@ -1997,36 +2027,6 @@ function _renderTeleopPanel(panelId, body) {
   el(panelId + "-tl-gimbal-disable")?.addEventListener("click",  () => socket.emit("teleop_gimbal_track_disable"));
   el(panelId + "-tl-gimbal-calibrate")?.addEventListener("click", () => socket.emit("teleop_gimbal_calibrate"));
   el(panelId + "-tl-gimbal-home")?.addEventListener("click",     () => socket.emit("teleop_gimbal_home"));
-  // Helper: sync range slider ↔ number input
-  const _bindRangeNum = (sliderId, numId) => {
-    const slider = el(sliderId);
-    const num = el(numId);
-    if (!slider || !num) return;
-    slider.addEventListener("input", () => { num.value = parseFloat(slider.value).toFixed(2); });
-    num.addEventListener("input", () => { slider.value = parseFloat(num.value) || 0; });
-  };
-  _bindRangeNum(panelId + "-tl-deadzone", panelId + "-tl-deadzone-num");
-  _bindRangeNum(panelId + "-tl-deadband", panelId + "-tl-deadband-num");
-  _bindRangeNum(panelId + "-tl-smoothing", panelId + "-tl-smoothing-num");
-  _bindRangeNum(panelId + "-tl-precision", panelId + "-tl-precision-num");
-  _bindRangeNum(panelId + "-tl-rate-limit", panelId + "-tl-rate-limit-num");
-  _bindRangeNum(panelId + "-tl-yaw-gain", panelId + "-tl-yaw-gain-num");
-  _bindRangeNum(panelId + "-tl-pitch-gain", panelId + "-tl-pitch-gain-num");
-
-  // Apply button: sends all noise-suppression + gain params
-  el(panelId + "-tl-apply-config")?.addEventListener("click", () => {
-    socket.emit("teleop_set_head_config", {
-      deadzone: parseFloat(el(panelId + "-tl-deadzone")?.value || 3),
-      deadband: parseFloat(el(panelId + "-tl-deadband")?.value || 0.3),
-      smoothing: parseFloat(el(panelId + "-tl-smoothing")?.value || 0.25),
-      rate_limit: parseFloat(el(panelId + "-tl-rate-limit")?.value || 300),
-      precision: parseFloat(el(panelId + "-tl-precision")?.value || 0.5),
-    });
-    socket.emit("teleop_set_head_gains", {
-      yaw_gain: parseFloat(el(panelId + "-tl-yaw-gain")?.value || 1.0),
-      pitch_gain: parseFloat(el(panelId + "-tl-pitch-gain")?.value || 1.0),
-    });
-  });
 }
 
 function _updateTeleopState(panelId, s) {
@@ -2064,28 +2064,6 @@ function _updateTeleopState(panelId, s) {
     s.gimbal_calibrated ? I18n.t("teleop.calib_yes") : I18n.t("teleop.calib_no"));
   _maybeSet(el(panelId + "-tl-head-yaw"), fmt(s.head_yaw_deg || 0, 1));
   _maybeSet(el(panelId + "-tl-head-pitch"), fmt(s.head_pitch_deg || 0, 1));
-
-  // Noise-suppression params — update sliders + number inputs from state
-  const _syncSliderNum = (sliderId, numId, value, decimals) => {
-    const slider = el(sliderId);
-    const num = el(numId);
-    if (slider) slider.value = value;
-    if (num) num.value = value.toFixed(decimals);
-  };
-  const deadzone = s.head_deadzone != null ? s.head_deadzone : 3.0;
-  const deadband = s.head_deadband != null ? s.head_deadband : 0.3;
-  const smoothing = s.head_smoothing != null ? s.head_smoothing : 0.25;
-  const precision = s.head_precision != null ? s.head_precision : 0.5;
-  const rateLimit = s.head_rate_limit != null ? s.head_rate_limit : 300;
-  const yawGain = s.head_yaw_gain != null ? s.head_yaw_gain : 1.0;
-  const pitchGain = s.head_pitch_gain != null ? s.head_pitch_gain : 1.0;
-  _syncSliderNum(panelId + "-tl-deadzone", panelId + "-tl-deadzone-num", deadzone, 1);
-  _syncSliderNum(panelId + "-tl-deadband", panelId + "-tl-deadband-num", deadband, 2);
-  _syncSliderNum(panelId + "-tl-smoothing", panelId + "-tl-smoothing-num", smoothing, 2);
-  _syncSliderNum(panelId + "-tl-precision", panelId + "-tl-precision-num", precision, 1);
-  _syncSliderNum(panelId + "-tl-rate-limit", panelId + "-tl-rate-limit-num", rateLimit, 0);
-  _syncSliderNum(panelId + "-tl-yaw-gain", panelId + "-tl-yaw-gain-num", yawGain, 2);
-  _syncSliderNum(panelId + "-tl-pitch-gain", panelId + "-tl-pitch-gain-num", pitchGain, 2);
 
   // Limits display
   if (s.gimbal_yaw_limits) {
@@ -2784,7 +2762,6 @@ if (ROLE === "admin") {
     });
     socket.on("error", (data) => alert(data.msg));
     socket.on("optimizer_updated", (cfg) => {
-      // Update all open gimbal panels
       PanelManager._panels.forEach((p, panelId) => {
         if (p.module === "gimbal") {
           var optOn = cfg && cfg.enabled;
@@ -2801,7 +2778,6 @@ if (ROLE === "admin") {
         }
       });
     });
-
     // Key binding table
     const bindTbody = el("bind-table-body");
     if (bindTbody) {

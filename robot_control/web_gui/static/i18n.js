@@ -240,17 +240,7 @@ I18n.zh["teleop.gimbal_disable"]      = "禁用头部跟踪";
 I18n.zh["teleop.gimbal_calibrate"]    = "标定头部参考位";
 I18n.zh["teleop.gimbal_home"]         = "云台归位";
 I18n.zh["teleop.gimbal_unavailable"]  = "不可用";
-I18n.zh["teleop.gimbal_yaw_gain"]   = "水平灵敏度";
-I18n.zh["teleop.gimbal_pitch_gain"] = "垂直灵敏度";
-I18n.zh["teleop.gimbal_set_gains"]  = "应用灵敏度";
-I18n.zh["teleop.gimbal_sensitivity_label"] = "VR-云台转动比例";
 I18n.zh["teleop.gimbal_limits"]     = "限位";
-I18n.zh["teleop.gimbal_deadband"]  = "死区";
-I18n.zh["teleop.gimbal_smoothing"] = "平滑";
-I18n.zh["teleop.gimbal_rate_limit"] = "速率限制";
-I18n.zh["teleop.gimbal_deadzone"]   = "死区阈值";
-I18n.zh["teleop.gimbal_precision"]  = "量化精度";
-I18n.zh["teleop.gimbal_apply_config"] = "应用";
 
 I18n.en["teleop.gimbal_section"]      = "Head Tracking (Gimbal)";
 I18n.en["teleop.gimbal_status"]       = "Gimbal:";
@@ -263,17 +253,7 @@ I18n.en["teleop.gimbal_disable"]      = "Disable Head Track";
 I18n.en["teleop.gimbal_calibrate"]    = "Calibrate Head Ref";
 I18n.en["teleop.gimbal_home"]         = "Gimbal Home";
 I18n.en["teleop.gimbal_unavailable"]  = "N/A";
-I18n.en["teleop.gimbal_yaw_gain"]   = "H. Sensitivity";
-I18n.en["teleop.gimbal_pitch_gain"] = "V. Sensitivity";
-I18n.en["teleop.gimbal_set_gains"]  = "Apply Sensitivity";
-I18n.en["teleop.gimbal_sensitivity_label"] = "VR→Gimbal Ratio";
 I18n.en["teleop.gimbal_limits"]     = "Limits";
-I18n.en["teleop.gimbal_deadband"]  = "Deadband";
-I18n.en["teleop.gimbal_smoothing"] = "Smoothing";
-I18n.en["teleop.gimbal_rate_limit"] = "Rate Limit";
-I18n.en["teleop.gimbal_deadzone"]   = "Dead Zone";
-I18n.en["teleop.gimbal_precision"]  = "Precision";
-I18n.en["teleop.gimbal_apply_config"] = "Apply";
 
 /* === camera panel === */
 I18n.zh["camera.offline"]  = "摄像头未连接";
@@ -302,6 +282,17 @@ I18n.en["camera.status_stale"] = "Stale";
 I18n.en["camera.status_waiting"] = "Waiting...";
 I18n.en["camera.select_device"] = "Select Device";
 
+/* === camera mode switching === */
+I18n.zh["camera.mode_color"]  = "彩色";
+I18n.zh["camera.mode_stereo"] = "双目";
+I18n.zh["camera.mode_depth"]  = "深度";
+I18n.zh["camera.mode_label"]  = "模式";
+
+I18n.en["camera.mode_color"]  = "Color";
+I18n.en["camera.mode_stereo"] = "Stereo";
+I18n.en["camera.mode_depth"]  = "Depth";
+I18n.en["camera.mode_label"]  = "Mode";
+
 /* === gimbal panel === */
 I18n.zh["gimbal.title"]       = "云台相机控制";
 I18n.zh["gimbal.yaw"]         = "偏航";
@@ -320,9 +311,9 @@ I18n.zh["gimbal.not_connected"] = "云台未连接";
 I18n.zh["gimbal.home_pos"]     = "原点";
 I18n.zh["gimbal.set_home"]     = "设为原点";
 I18n.zh["gimbal.rel_angle"]    = "相对原点";
-I18n.zh["gimbal.optimizer"]    = "优化算法";
-I18n.zh["gimbal.optimizer_on"] = "优化: 开";
-I18n.zh["gimbal.optimizer_off"] = "优化: 关";
+I18n.zh["gimbal.optimizer"]    = "跨轴前馈";
+I18n.zh["gimbal.optimizer_on"] = "前馈: 开";
+I18n.zh["gimbal.optimizer_off"] = "前馈: 关";
 I18n.zh["module.gimbal"]      = "云台相机";
 
 I18n.en["gimbal.title"]       = "Gimbal Camera Control";
@@ -342,9 +333,9 @@ I18n.en["gimbal.not_connected"] = "Gimbal offline";
 I18n.en["gimbal.home_pos"]     = "Home Pos";
 I18n.en["gimbal.set_home"]     = "Set Home";
 I18n.en["gimbal.rel_angle"]    = "Rel to Home";
-I18n.en["gimbal.optimizer"]    = "Optimizer";
-I18n.en["gimbal.optimizer_on"] = "Opt: ON";
-I18n.en["gimbal.optimizer_off"] = "Opt: OFF";
+I18n.en["gimbal.optimizer"]    = "Cross-Axis FF";
+I18n.en["gimbal.optimizer_on"] = "FF: ON";
+I18n.en["gimbal.optimizer_off"] = "FF: OFF";
 I18n.en["module.gimbal"]      = "Gimbal Camera";
 
 /* === UGV panel === */
