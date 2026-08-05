@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 # Orbbec vendor ID; Femto Bolt product IDs
 _ORBBEC_VID = "2bc5"
-_ORBBEC_PIDS = {"0800", "0801", "0900"}  # Femto Bolt / Femto Mega variants
+_ORBBEC_PIDS = {"066b", "066c", "0800", "0801", "0900"}  # Femto Bolt (066b) / Mega / other variants
 
 
 def is_orbbec_k4a_available() -> bool:

@@ -35,8 +35,10 @@ except ImportError:
 try:
     from camera_sdk.orbbec import is_orbbec_k4a_available, detect_orbbec_devices, OrbbecPipeline  # noqa: E501
     _HAS_ORBBEC_K4A = is_orbbec_k4a_available()
+    _HAS_ORBBEC_DETECT = True  # USB VID/PID detection works without k4a
 except ImportError:
     _HAS_ORBBEC_K4A = False
+    _HAS_ORBBEC_DETECT = False
     OrbbecPipeline = None  # type: ignore[assignment]
     detect_orbbec_devices = None  # type: ignore[assignment]
 
@@ -1138,7 +1140,7 @@ class CameraModule(RobotModule):
                             sid, rs_info["serial"], device, w, h, f)
                 except Exception:
                     pass
-            if _HAS_ORBBEC_K4A:
+            if _HAS_ORBBEC_DETECT:
                 try:
                     ob_devices = detect_orbbec_devices([device])
                     if ob_devices:
@@ -1174,7 +1176,7 @@ class CameraModule(RobotModule):
 
         # Determine which V4L2 devices belong to Orbbec cameras
         ob_device_set: set = set()
-        if _HAS_ORBBEC_K4A:
+        if _HAS_ORBBEC_DETECT:
             try:
                 ob_devices = detect_orbbec_devices(detected)
                 for ob_dev in ob_devices:
@@ -1223,7 +1225,7 @@ class CameraModule(RobotModule):
                 pass
 
         ob_device_set: set = set()
-        if _HAS_ORBBEC_K4A:
+        if _HAS_ORBBEC_DETECT:
             try:
                 for ob_dev in detect_orbbec_devices(detected):
                     for node in ob_dev.get("v4l2_nodes", []):
