@@ -1,0 +1,153 @@
+2026-06-05_08:44:04:17395 00:00:00:000 INFO    - Marketing Ver = 5.21.1
+2026-06-05_08:44:04:17417 00:00:00:000 INFO    - parseOpts(): The following ports will be used: Primary - 30001, Secondary - 30002, Interpreter - 30020, Matlab - 30003, RTDE - 30004, Primary_read_only - 30011, Secondary_read_only - 30012, Matlab_read_only - 30013.
+2026-06-05_08:44:05:68091 00:00:00:000 INFO    - ConfigurationManager::loadConfiguration: Loading urcontrol.conf from: /root/.urcontrol/urcontrol.conf.
+2026-06-05_08:44:05:68097 00:00:00:000 WARNING - Configuration property "resistance" not found in section "Energy Eater"; setting to default value: "0"
+URControl 71.7.43 [] G5 (20-02-2025, 13:31:34)
+2026-06-05_08:44:06:93020 00:00:00:000 INFO    - Applying default console logging configuration for Actin
+2026-06-05_08:44:06:93025 00:00:00:000 INFO    - [ACTIN][1849][default] Actin logging configured
+2026-06-05_08:44:07:01900 00:00:00:000 INFO    - [ACTIN][1849][default] EcShmSyncChannel::EcShmSyncChannel created segment external_axes_bus_sync
+2026-06-05_08:44:07:04329 00:00:00:000 INFO    - Loading calibration from '/root/.urcontrol/calibration.conf'
+2026-06-05_08:44:07:04335 00:00:00:000 INFO    - Safety Version 5:8
+2026-06-05_08:44:07:04337 00:00:00:000 INFO    - LLInterface::open: Opening interfaces
+2026-06-05_08:44:07:04338 00:00:00:000 INFO    - URbus was found
+2026-06-05_08:44:07:06768 00:00:00:000 INFO    - LLInterface::open: Interfaces opened
+2026-06-05_08:44:07:06772 00:00:00:000 INFO    - LLInterface::open: Opening interfaces
+2026-06-05_08:44:07:06774 00:00:00:000 INFO    - LLInterface::open: Already open
+2026-06-05_08:44:07:16441 00:00:00:000 INFO    - SCB::resetSCBMode: Resetting SCB mode from SCB_MODE_DISCONNECTED to SCB_MODE_INITIALIZING
+2026-06-05_08:44:07:16443 00:00:00:000 INFO    - Tool::resetMode: Resetting mode from UNDEFINED to NOT_RESPONDING
+2026-06-05_08:44:07:16445 00:00:00:000 INFO    - LLInterface::restart: Rebooting Embedded Modules...
+2026-06-05_08:44:07:22892 00:00:00:000 INFO    - robot_mode changed from ROBOT_MODE_DISCONNECTED to ROBOT_MODE_BOOTING
+2026-06-05_08:44:07:22897 00:00:00:001 ERROR   - ControlDataSender unable to send: Device '/dev/urbus/robot_ctrl_ds' not open for write operation
+2026-06-05_08:44:07:22899 00:00:00:001 WARNING - Runtime is blocked, but runtime data queue is empty, trying to recover
+2026-06-05_08:44:07:22900 00:00:00:002 ERROR   - ControlDataSender unable to send: Device '/dev/urbus/robot_ctrl_ds' not open for write operation
+2026-06-05_08:44:07:23708 00:00:00:003 INFO    - Socket "RobotControlDataLoggerServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:07:23717 00:00:00:003 INFO    - Socket "RobotControlDataLoggerServerSocket" object was destroyed.
+2026-06-05_08:44:07:23719 00:00:00:007 INFO    - Socket "DataScopeServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:07:23720 00:00:00:007 INFO    - Socket "DataScopeServerSocket" object was destroyed.
+2026-06-05_08:44:07:47890 00:00:00:248 INFO    - LLInterface::open: Opening interfaces
+2026-06-05_08:44:07:47896 00:00:00:248 INFO    - URbus was found
+2026-06-05_08:44:07:48705 00:00:00:251 WARNING - Runtime is blocked, but runtime data queue is empty, trying to recover
+2026-06-05_08:44:07:49524 00:00:00:254 INFO    - LLInterface::open: Interfaces opened
+2026-06-05_08:44:07:49527 00:00:00:258 INFO    - FpgaRebooter::setXillybusIRQPriority - Xillybus IRQ priority was set to: 79 on pid: 1962
+2026-06-05_08:44:07:51140 00:00:00:270 INFO    - robot_mode changed from ROBOT_MODE_BOOTING to ROBOT_MODE_DISCONNECTED
+2026-06-05_08:44:07:51948 00:00:00:282 INFO    - robot_mode changed from ROBOT_MODE_DISCONNECTED to ROBOT_MODE_BOOTING
+2026-06-05_08:44:09:13231 00:00:01:892 INFO    - Safety Version 5:8
+2026-06-05_08:44:10:22027 00:00:02:979 INFO    - robot_mode changed from ROBOT_MODE_BOOTING to ROBOT_MODE_DISCONNECTED
+2026-06-05_08:44:10:22840 00:00:02:989 INFO    - SCB::logSafetyModeChange: SafetyA safety mode limit state changed from UNKNOWN to NORMAL
+2026-06-05_08:44:10:22846 00:00:02:989 INFO    - SCB::logSafetyModeChange: SafetyB safety mode limit state changed from UNKNOWN to NORMAL
+2026-06-05_08:44:10:26880 00:00:03:029 INFO    - SCB::logScbStateChange: SafetyB main state changed from UNKNOWN to INITIALIZING
+2026-06-05_08:44:10:78544 00:00:03:542 INFO    - SCB::logScbStateChange: SafetyA main state changed from UNKNOWN to INITIALIZING
+2026-06-05_08:44:10:78550 00:00:03:542 INFO    - SCB::update: scb mode changed from SCB_MODE_DISCONNECTED to SCB_MODE_INITIALIZING
+2026-06-05_08:44:11:06854 00:00:03:828 INFO    - TP::update: TP state changed from SELF_DIAGNOSTIC to BOOTING
+2026-06-05_08:44:11:06860 00:00:03:828 INFO    - IMMI::update: DeviceMode A state changed from UNDEFINED to NOT_RESPONDING
+2026-06-05_08:44:11:06861 00:00:03:828 INFO    - IMMI::update: DeviceMode B state changed from UNDEFINED to NOT_RESPONDING
+2026-06-05_08:44:11:06863 00:00:03:828 INFO    - robot_mode changed from ROBOT_MODE_DISCONNECTED to ROBOT_MODE_CONFIRM_SAFETY
+2026-06-05_08:44:11:06864 00:00:03:828 INFO    - SCBMode changed from SCB_MODE_DISCONNECTED to SCB_MODE_INITIALIZING
+2026-06-05_08:44:11:06865 00:00:03:828 INFO    - LLInterface::restart: Reboot of Embedded Modules succeeded.
+2026-06-05_08:44:41:83124 00:00:34:593 INFO    - TCPServer: Accepted connection on CLIENTTYPE_MATLAB_CLIENT_READ_ONLY interface
+2026-06-05_08:44:41:83129 00:00:34:593 INFO    - Socket "ReadOnlyMATLABServerSocket"  server with address 127.0.0.1:30013 connected to 127.0.0.1:48044
+URControl::handler caught SIGTERM
+2026-06-05_08:44:49:51138 00:00:42:274 WARNING - collectRTOutputData() - time stamp not changed: 42.274876
+2026-06-05_08:44:49:51143 00:00:42:274 INFO    - RTM: Target RobotMode changed from ROBOT_MODE_DISCONNECTED to ROBOT_MODE_BOOTING
+2026-06-05_08:44:49:51144 00:00:42:274 INFO    - New safety mode: SAFETY_MODE_NORMAL
+2026-06-05_08:44:49:51146 00:00:42:274 INFO    - Runtime state change: from PROGRAM_STATE_UNDEFINED to PROGRAM_STATE_STOPPED
+2026-06-05_08:44:49:54374 00:00:42:277 INFO    - Socket "CLIENTTYPE_MATLAB_CLIENT_READ_ONLY ClientSocket"  disconnected by Socket::close()
+2026-06-05_08:44:49:54381 00:00:42:277 INFO    - Socket "CLIENTTYPE_MATLAB_CLIENT_READ_ONLY ClientSocket" object was destroyed.
+2026-06-05_08:44:51:10239 00:00:42:277 INFO    - Succeeded writing joint angles: [5.756651, 6.234135, 3.804438, 5.709223, 1.758274, 0.542018]
+2026-06-05_08:44:51:11052 00:00:42:277 INFO    - Socket "ModbusServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:11058 00:00:42:277 INFO    - Socket "ModbusServerSocket" object was destroyed.
+2026-06-05_08:44:51:11059 00:00:42:277 INFO    - Socket "ReadOnlyMATLABServerSocket"  server with address 127.0.0.1:30013 connected to 127.0.0.1:48044 disconnected by Socket::close()
+2026-06-05_08:44:51:11061 00:00:42:277 INFO    - Socket "ReadOnlyMATLABServerSocket" object was destroyed.
+2026-06-05_08:44:51:11062 00:00:42:277 INFO    - Socket "ReadOnlySecondaryServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:11063 00:00:42:277 INFO    - Socket "ReadOnlySecondaryServerSocket" object was destroyed.
+2026-06-05_08:44:51:11065 00:00:42:277 INFO    - Socket "ReadOnlyPrimaryServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:11066 00:00:42:277 INFO    - Socket "ReadOnlyPrimaryServerSocket" object was destroyed.
+2026-06-05_08:44:51:11067 00:00:42:277 INFO    - Socket "RTDEServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:11068 00:00:42:277 INFO    - Socket "RTDEServerSocket" object was destroyed.
+2026-06-05_08:44:51:11070 00:00:42:277 INFO    - Socket "MATLABServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:11071 00:00:42:277 INFO    - Socket "MATLABServerSocket" object was destroyed.
+2026-06-05_08:44:51:11072 00:00:42:277 INFO    - Socket "InterpreterServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:11073 00:00:42:277 INFO    - Socket "InterpreterServerSocket" object was destroyed.
+2026-06-05_08:44:51:11075 00:00:42:277 INFO    - Socket "SecondaryServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:11076 00:00:42:277 INFO    - Socket "SecondaryServerSocket" object was destroyed.
+2026-06-05_08:44:51:11077 00:00:42:277 INFO    - Socket "PrimaryServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:11078 00:00:42:277 INFO    - Socket "PrimaryServerSocket" object was destroyed.
+2026-06-05_08:44:51:11080 00:00:42:277 INFO    - WatchdogService::stopAllWatchdog()
+2026-06-05_08:44:51:11888 00:00:42:282 INFO    - Socket "RobotControlDataLoggerServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:11895 00:00:42:282 INFO    - Socket "RobotControlDataLoggerServerSocket" object was destroyed.
+2026-06-05_08:44:51:12705 00:00:42:294 INFO    - Socket "DataScopeServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:12713 00:00:42:294 INFO    - Socket "DataScopeServerSocket" object was destroyed.
+2026-06-05_08:44:51:15941 00:00:42:325 INFO    - Socket "FilesysServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:15948 00:00:42:325 INFO    - Socket "FilesysServerSocket" object was destroyed.
+2026-06-05_08:44:51:26432 00:00:42:430 INFO    - Socket "BootloaderServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:26437 00:00:42:430 INFO    - Socket "BootloaderServerSocket" object was destroyed.
+2026-06-05_08:44:51:36115 00:00:42:528 INFO    - Killing profisafebridge
+2026-06-05_08:44:51:36121 00:00:42:528 INFO    - Socket "ProfiSafeBridgeServerSocket"  disconnected by Socket::close()
+2026-06-05_08:44:51:36123 00:00:42:528 INFO    - Socket "ProfiSafeBridgeServerSocket" object was destroyed.
+2026-06-05_08:44:51:47446 00:00:42:639 INFO    - Killing profisafebridge
+URControl::shutdown
+2026-06-05_08:44:51:78833 00:00:00:000 INFO    - Marketing Ver = 5.21.1
+2026-06-05_08:44:51:78851 00:00:00:000 INFO    - parseOpts(): The following ports will be used: Primary - 30001, Secondary - 30002, Interpreter - 30020, Matlab - 30003, RTDE - 30004, Primary_read_only - 30011, Secondary_read_only - 30012, Matlab_read_only - 30013.
+URControl 71.7.43 [] G5 (20-02-2025, 13:31:34)
+2026-06-05_08:44:51:80470 00:00:00:000 INFO    - ConfigurationManager::loadConfiguration: Loading urcontrol.conf from: /root/.urcontrol/urcontrol.conf.
+2026-06-05_08:44:51:80476 00:00:00:000 WARNING - Configuration property "resistance" not found in section "Energy Eater"; setting to default value: "0"
+2026-06-05_08:44:51:86948 00:00:00:000 INFO    - Applying default console logging configuration for Actin
+2026-06-05_08:44:51:86955 00:00:00:000 INFO    - [ACTIN][2174][default] Actin logging configured
+2026-06-05_08:44:51:95848 00:00:00:000 INFO    - [ACTIN][2174][default] EcShmSyncChannel::EcShmSyncChannel created segment external_axes_bus_sync
+2026-06-05_08:44:51:98277 00:00:00:000 INFO    - Loading calibration from '/root/.urcontrol/calibration.conf'
+2026-06-05_08:44:51:98283 00:00:00:000 INFO    - Safety Version 5:8
+2026-06-05_08:44:51:98286 00:00:00:000 INFO    - LLInterface::open: Opening interfaces
+2026-06-05_08:44:51:98287 00:00:00:000 INFO    - URbus was found
+2026-06-05_08:44:52:00729 00:00:00:001 WARNING - Runtime is blocked, but runtime data queue is empty, trying to recover
+2026-06-05_08:44:52:01542 00:00:00:004 INFO    - LLInterface::open: Interfaces opened
+2026-06-05_08:44:52:01547 00:00:00:004 INFO    - LLInterface::open: Opening interfaces
+2026-06-05_08:44:52:01548 00:00:00:004 INFO    - LLInterface::open: Already open
+2026-06-05_08:44:52:11349 00:00:00:103 INFO    - SCB::resetSCBMode: Resetting SCB mode from SCB_MODE_DISCONNECTED to SCB_MODE_INITIALIZING
+2026-06-05_08:44:52:11354 00:00:00:103 INFO    - Tool::resetMode: Resetting mode from UNDEFINED to NOT_RESPONDING
+2026-06-05_08:44:52:11357 00:00:00:103 INFO    - LLInterface::restart: Rebooting Embedded Modules...
+2026-06-05_08:44:52:33990 00:00:00:326 INFO    - robot_mode changed from ROBOT_MODE_DISCONNECTED to ROBOT_MODE_BOOTING
+2026-06-05_08:44:55:05168 00:00:03:042 INFO    - Safety Version 5:8
+2026-06-05_08:44:56:14967 00:00:04:137 INFO    - SCB::logSafetyModeChange: SafetyA safety mode limit state changed from UNKNOWN to NORMAL
+2026-06-05_08:44:56:14974 00:00:04:137 INFO    - SCB::logSafetyModeChange: SafetyB safety mode limit state changed from UNKNOWN to NORMAL
+2026-06-05_08:44:56:14976 00:00:04:137 INFO    - SCB::update: scb mode changed from SCB_MODE_INITIALIZING to SCB_MODE_DISCONNECTED
+2026-06-05_08:44:56:19829 00:00:04:187 INFO    - SCB::logScbStateChange: SafetyB main state changed from UNKNOWN to INITIALIZING
+2026-06-05_08:44:56:69953 00:00:04:690 INFO    - SCB::logScbStateChange: SafetyA main state changed from UNKNOWN to INITIALIZING
+2026-06-05_08:44:56:69958 00:00:04:690 INFO    - SCB::update: scb mode changed from SCB_MODE_DISCONNECTED to SCB_MODE_INITIALIZING
+2026-06-05_08:44:56:99027 00:00:04:978 INFO    - TP::update: TP state changed from SELF_DIAGNOSTIC to BOOTING
+2026-06-05_08:44:56:99034 00:00:04:978 INFO    - IMMI::update: DeviceMode A state changed from UNDEFINED to NOT_RESPONDING
+2026-06-05_08:44:56:99035 00:00:04:978 INFO    - IMMI::update: DeviceMode B state changed from UNDEFINED to NOT_RESPONDING
+2026-06-05_08:44:56:99036 00:00:04:978 INFO    - robot_mode changed from ROBOT_MODE_BOOTING to ROBOT_MODE_CONFIRM_SAFETY
+2026-06-05_08:44:56:99038 00:00:04:978 INFO    - SCBMode changed from SCB_MODE_DISCONNECTED to SCB_MODE_INITIALIZING
+2026-06-05_08:44:56:99039 00:00:04:978 INFO    - LLInterface::restart: Reboot of Embedded Modules succeeded.
+2026-06-05_08:45:00:54039 00:00:08:533 INFO    - TCPServer: Accepted connection on CLIENTTYPE_MATLAB_CLIENT_READ_ONLY interface
+2026-06-05_08:45:00:54045 00:00:08:533 INFO    - Socket "ReadOnlyMATLABServerSocket"  server with address 127.0.0.1:30013 connected to 127.0.0.1:48064
+2026-06-05_08:45:10:45951 00:00:18:450 INFO    - TCPServer: Accepted connection on CLIENTTYPE_MATLAB_CLIENT interface
+2026-06-05_08:45:10:45958 00:00:18:450 INFO    - Socket "MATLABServerSocket"  server with address 127.0.0.1:30003 connected to 127.0.0.1:38266
+2026-06-05_08:45:10:55648 00:00:18:542 INFO    - TCPServer: Accepted connection on CLIENTTYPE_MATLAB_CLIENT_READ_ONLY interface
+2026-06-05_08:45:10:55655 00:00:18:542 INFO    - Socket "ReadOnlyMATLABServerSocket"  server with address 127.0.0.1:30013 connected to 127.0.0.1:48068
+2026-06-05_08:45:11:46073 00:00:19:453 INFO    - TCPServer: Accepted connection on CLIENTTYPE_PRIMARY_CLIENT interface
+2026-06-05_08:45:11:46080 00:00:19:453 INFO    - Socket "PrimaryServerSocket"  server with address 127.0.0.1:30001 connected to 127.0.0.1:51220
+2026-06-05_08:45:11:48498 00:00:19:476 INFO    - TCPServer: Accepted connection on CLIENTTYPE_RTDE_CLIENT interface
+2026-06-05_08:45:11:48505 00:00:19:476 INFO    - Socket "RTDEServerSocket"  server with address 127.0.0.1:30004 connected to 127.0.0.1:48228
+2026-06-05_08:45:11:48506 00:00:19:476 INFO    - TCPServer: RTDE client connected
+2026-06-05_08:45:11:49333 00:00:19:480 INFO    - RTDE: Client connected with protocol version: 2
+2026-06-05_08:45:11:49341 00:00:19:485 INFO    - RTDE: Paused sending RT data
+2026-06-05_08:45:11:50957 00:00:19:497 INFO    - RTDE: Started sending RT data
+2026-06-05_08:45:11:65549 00:00:19:641 INFO    - CONFIRM_USER_SAFETY_PARAMETERS
+2026-06-05_08:45:11:65556 00:00:19:643 INFO    - SCB::logScbStateChange: SafetyA main state changed from INITIALIZING to IDLE
+2026-06-05_08:45:11:65557 00:00:19:643 INFO    - SCB::logScbStateChange: SafetyB main state changed from INITIALIZING to IDLE
+2026-06-05_08:45:11:65558 00:00:19:645 WARNING - Runtime is blocked, but runtime data queue is empty, trying to recover
+2026-06-05_08:45:11:65560 00:00:19:647 INFO    - TP::update: TP state changed from BOOTING to IDLE
+2026-06-05_08:45:11:68787 00:00:19:674 INFO    - TP::update: TP state changed from IDLE to RUNNING
+2026-06-05_08:45:12:16470 00:00:20:154 INFO    - SCB::logScbStateChange: SafetyA main state changed from IDLE to RUNNING
+2026-06-05_08:45:12:17283 00:00:20:160 INFO    - SCB::logScbStateChange: SafetyB main state changed from IDLE to RUNNING
+2026-06-05_08:45:12:17289 00:00:20:160 INFO    - SCB::update: scb mode changed from SCB_MODE_INITIALIZING to SCB_MODE_RUNNING
+2026-06-05_08:45:12:17291 00:00:20:160 INFO    - robot_mode changed from ROBOT_MODE_CONFIRM_SAFETY to ROBOT_MODE_POWER_OFF
+2026-06-05_08:45:12:17292 00:00:20:160 INFO    - SCBMode changed from SCB_MODE_INITIALIZING to SCB_MODE_RUNNING
+2026-06-05_08:45:12:17293 00:00:20:163 INFO    - SCB::logSafetyStateChange: SafetyA safety state changed from ROBOT_OFF to EMERGENCY_STOP_ROBOT
+2026-06-05_08:45:12:17294 00:00:20:163 INFO    - SCB::logSafetyStateChange: SafetyB safety state changed from ROBOT_OFF to EMERGENCY_STOP_ROBOT
+2026-06-05_08:45:12:17296 00:00:20:163 WARNING - collectRTOutputData() - time stamp not changed: 20.163000
+2026-06-05_08:45:12:17297 00:00:20:164 INFO    - RTM: Target RobotMode changed from ROBOT_MODE_DISCONNECTED to ROBOT_MODE_POWER_OFF
+2026-06-05_08:45:12:17298 00:00:20:164 INFO    - New safety mode: SAFETY_MODE_ROBOT_EMERGENCY_STOP
+2026-06-05_08:45:12:17299 00:00:20:164 INFO    - Runtime state change: from PROGRAM_STATE_UNDEFINED to PROGRAM_STATE_STOPPED
+2026-06-05_08:45:17:52822 00:00:25:515 WARNING - Failed to send state to client 127.0.0.1. Sending discontinued.

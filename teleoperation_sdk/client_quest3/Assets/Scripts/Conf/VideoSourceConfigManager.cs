@@ -368,6 +368,17 @@ public class VideoSourceConfigManager : MonoBehaviour
     public float VisibleRatio => CurrentVideoSource?.GetFloatProperty("visibleRatio") ?? 0f;
     public float ContentRatio => CurrentVideoSource?.GetFloatProperty("contentRatio") ?? 0f;
     public float HeightCompressionFactor => CurrentVideoSource?.GetFloatProperty("heightCompressionFactor") ?? 0f;
+
+    /// <summary>
+    /// 0 = mono (one full frame, both eyes see the same image),
+    /// 1 = side-by-side stereo (texture packs left|right eyes).
+    /// Defaults to 1 so existing stereo sources are unaffected.
+    /// </summary>
+    public float StereoMode =>
+        CurrentVideoSource != null && CurrentVideoSource.HasProperty("stereoMode")
+            ? CurrentVideoSource.GetFloatProperty("stereoMode")
+            : 1f;
+
     public string RawImageRectSize => CurrentVideoSource?.GetStringProperty("RawImageRectSize") ?? string.Empty;
 
     /// <summary>

@@ -6,6 +6,8 @@
         _visibleRatio ("Visible Ratio", Range(0.0, 2.0)) = 1.0
         _contentRatio ("Content Ratio", Range(0.0, 2.0)) = 0.555
         _heightCompressionFactor ("Height Compression", Range(0.0, 2.0)) = 1.25
+        _stereoMode ("Stereo Mode (0=mono, 1=side-by-side)", Range(0.0, 1.0)) = 1.0
+        _monoScale ("Mono Fit Scale (xy)", Vector) = (1,1,0,0)
     }
     SubShader
     {
@@ -37,6 +39,8 @@
             float _contentRatio;
             float _visibleRatio;
             float _heightCompressionFactor;
+            float _stereoMode;
+            float2 _monoScale;
             
             v2f vert (appdata v)
             {
@@ -53,10 +57,25 @@
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
                 
                 fixed4 col = fixed4(0.0, 0.0, 0.0, 0.0);
-                
+
                 // Automatically detect which eye we're rendering for
                 bool isLeftEye = (unity_StereoEyeIndex == 0);
-                
+
+                // Mono sources (e.g. RealSense) send one full frame, not a
+                // packed L|R pair — both eyes sample the whole texture.
+                // _monoScale letterboxes the source into the fullscreen canvas
+                // so a 4:3 frame keeps its shape instead of stretching to fill.
+                if (_stereoMode < 0.5)
+                {
+                    float2 mono_uv = (i.uv - 0.5) * _monoScale + 0.5;
+                    if (mono_uv.x < 0.0 || mono_uv.x > 1.0 ||
+                        mono_uv.y < 0.0 || mono_uv.y > 1.0)
+                    {
+                        return col; // outside the fitted image — leave the bars empty
+                    }
+                    return tex2D(_mainRT, mono_uv);
+                }
+
                 // Adjust UV coordinates based on eye
                 float2 adjusted_uv = i.uv;
                 
@@ -100,9 +119,7 @@
                     // Map to left half of stereo texture
                     float final_x = scaled_x * 0.5;
                     float final_y = new_uv.y * _contentRatio + (1.0 - _contentRatio) * 0.5;
-                    // Flip vertically by inverting the Y coordinate
-                    final_y = 1.0 - final_y;
-                    
+
                     col = tex2D(_mainRT, float2(final_x, final_y));
                 }
                 else // Right eye
@@ -113,44 +130,11 @@
                     // Map to right half of stereo texture
                     float final_x = scaled_x * 0.5 + 0.5;
                     float final_y = new_uv.y * _contentRatio + (1.0 - _contentRatio) * 0.5;
-                    // Flip vertically by inverting the Y coordinate
-                    final_y = 1.0 - final_y;
                     
                     col = tex2D(_mainRT, float2(final_x, final_y));
                 }
                 
-                // Apply YUV to RGB conversion for MediaDecoder output
-                // MediaDecoder typically outputs in YUV420 format
-                if (col.a > 0.0) // Only convert if we have valid pixel data
-                {
-                    // MediaDecoder typically outputs limited-range YUV
-                    float y = col.r * 255.0;
-                    float u = col.g * 255.0 - 128.0;
-                    float v = col.b * 255.0 - 128.0;
-
-                    // Normalize limited-range YUV values
-                    y = (y - 16.0) / 219.0;
-                    u = u / 224.0;
-                    v = v / 224.0;
-
-                    // YUV to sRGB conversion
-                    float3 rgb;
-                    rgb.r = y + 1.13983 * v;
-                    rgb.g = y - 0.39465 * u - 0.58060 * v;
-                    rgb.b = y + 2.03211 * u;
-
-                    // Clamp RGB to avoid over/underflow
-                    rgb = clamp(rgb, 0.0, 1.0);
-
-                    // Convert sRGB to Linear space if Unity is using Linear color space
-                    #ifdef UNITY_COLORSPACE_GAMMA
-                    // Do nothing, already in gamma
-                    #else
-                        rgb = GammaToLinearSpace(rgb);
-                    #endif
-                        
-                    col.rgb = rgb;
-                }
+                // JPEG source provides RGB directly — no YUV conversion needed
                 
                 return col;
             }

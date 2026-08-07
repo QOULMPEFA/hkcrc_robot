@@ -72,6 +72,21 @@ On the main panel, select preferred pose data to be collected, click Record. Rec
 7. H2: If you close the live camera window, you can simply repeat Step 5.
 8. If you want to stop the camera streaming, quit the App on both sides.
 
+### Remote stereo vision sync from RealSense D455/D435 (Jetson) to Quest
+
+1. Ensure RealSense cameras are connected to the Jetson via USB 3.0
+2. Robot server auto-detects RealSense cameras when `"camera": {"auto_detect": True}` in config
+3. Start the bridge on Jetson:
+   ```bash
+   cd ~/robot_code
+   python3 camera_sdk/realsense_quest_bridge.py
+   ```
+4. Open **XRoboToolkit-Quest** on Quest
+5. On the Camera panel, select **REALSRENSE** as the video source
+6. Click **Listen**, input the Jetson's IP, and click Confirm
+7. You should now see the live camera feed. Press **B button** on the right-hand controller to adjust the near-clip plane for comfort
+8. To stop, close the camera window on Quest and stop the bridge on Jetson (Ctrl+C)
+
 ### Remote stereo vision sync from ZED camera (Orin) to Quest
 
 1. Clone [XRoboToolkit-Orin-Video-Sender](https://github.com/XR-Robotics/XRoboToolkit-Orin-Video-Sender.git) on Orin.
@@ -83,45 +98,122 @@ On the main panel, select preferred pose data to be collected, click Record. Rec
 4. Open **XRRoboToolkit-Quest** on Quest.
 5. On the Camera panel, select "ZEDMINI" as the video source.
 6. Click "Listen", input the IP of Orin, and click Confirm.
-7. You should now be able to see the live camera. Press B button on the right-hand controller to switch between side-by-side views and stereo-3D views.
+7. You should now be able to see the live camera.
 8. If you close the live camera window, you can simply repeat Step 6.
 9. If you want to stop the camera streaming, quit **XRRoboToolkit-Quest** on the XR headset and stop the OrinVideoSender on Orin.
+
+## RealSense Camera Streaming (Quest 3)
+
+Stream Intel RealSense D455 / D435 RGB video to Quest 3 VR headset via JPEG/UDP.
+
+### Architecture
+
+```
+RealSense (D455/D435)                    Jetson / Robot Server
+    │                                        │
+    ├── pyrealsense2 SDK RGB capture         │
+    ├── Pillow JPEG encode (in-process)      │
+    └── HTTP MJPEG /stream/cam0              │
+            │                                │
+            ├── realsense_quest_bridge.py ───┤
+            │   reads MJPEG, sends UDP       │
+            │   TCP :13579 (IP discovery)    │
+            │   UDP :10004 (JPEG frames)     │
+            │                                │
+    Quest 3 (WiFi) ◀─────────────────────────┘
+            │
+            ├── UDPJPEGReceiver.cs (C#)
+            │   background thread recv UDP
+            │   Texture2D.LoadImage decode
+            │   RawImage display
+            │
+            └── SampleRT.shader (VR stereo)
+                CanvCE canvas, per-eye UV mapping
+```
+
+### Quick Start
+
+1. **Robot server** must be running with `auto_detect: True` in camera config
+2. **Start the bridge** on the robot:
+   ```bash
+   cd ~/robot_code
+   python3 camera_sdk/realsense_quest_bridge.py
+   ```
+3. **Quest 3**: Open app, select **REALSRENSE** as video source, click Listen
+
+### Protocol
+
+UDP datagrams to Quest port 10004, 16-byte header + payload:
+
+```
+[4B LE frame_id][4B LE chunk_idx][4B LE total_chunks][4B LE jpeg_size][JPEG payload]
+```
+
+Max chunk payload 60000 bytes. Most 720p frames fit in a single datagram.
+
+### Key Scripts
+
+| Script | Role |
+|--------|------|
+| `Assets/Scripts/Camera/UDPJPEGReceiver.cs` | UDP recv + JPEG decode + RawImage display |
+| `Assets/Scripts/Li/SampleRT.shader` | VR stereo display (per-eye UV, no YUV conversion) |
+| `Assets/Scripts/Li/SetLERE.cs` | CanvCE activation + texture → matCE bind |
+| `Assets/Scripts/Camera/RemoteCameraWindow.cs` | Camera window lifecycle (questPlugin = null on Quest) |
+| `camera_sdk/realsense_quest_bridge.py` | Robot-side MJPEG→UDP relay bridge |
+
+### Controls
+
+| Input | Action |
+|-------|--------|
+| **B button** (right controller) | Toggle camera near-clip plane (comfort adjustment) |
+
+---
 
 ## Project Configuration
 
 ### Environment Requirements
-- Unity 2021.3.45f1
+- Unity 6000.3.21f1
 - Meta XR Interaction SDK 72.0.0 (com.meta.xr.sdk.interaction.ovr)
 - Oculus XR Plugin 3.4.1 (com.unity.xr.oculus)
 
 **Important Notes**:
-1. Use exact Unity version 2021.3.45f1 to avoid compatibility issues
+1. Use exact Unity version 6000.3.21f1 to avoid compatibility issues
 2. Complete Android module installation during Unity setup
+3. APK built via menu `Build/One-Click Package` → outputs to `Builds/Android/`
 
 ### Architecture Overview
-- **Cross-Platform Hybrid Architecture**:
-  Unity C# layer and Android Java layer communicate via JNI bridge for hardware-accelerated decoding and rendering.
+- **Video Pipeline (RealSense / JPEG-UDP)**:
+  Pure C# software decode via `Texture2D.LoadImage` — no MediaCodec, no native plugin, no OOM risk.
+  UDP datagrams received on background thread, reassembled, handed off to main thread for display.
 
 - **Dual Data Channels**:
-    - Video Stream: 60 FPS with adaptive QoS
-    - Pose Data Channel: 90Hz with low-latency priority
+    - Video Stream: 1280×720 @30 FPS JPEG/UDP (Quest 3)
+    - Pose Data Channel: 90 Hz with low-latency priority
 
 - **Thread Model**:
   | Thread Type          | Responsibilities                          |
   |----------------------|-------------------------------------------|
-  | Main Thread          | UI rendering & user input handling        |
-  | Worker Thread        | Video decoding/network transmission       |
-  | GL Thread            | OpenGL OES texture operations             |
+  | Main Thread          | UI rendering, Texture2D.LoadImage, display |
+  | Recv Thread          | UDP recv, JPEG reassembly                 |
+  | Worker Thread        | Pose/network transmission                 |
 
 - **Key Performance Metrics**:
   | Metric                     | Value                        |
   |----------------------------|------------------------------|
-  | End-to-End Latency          | ~100ms (720P *2 @60FPS)     |
-  | Pose Data Packet Size       | 56 bytes/frame              |
+  | Video Resolution            | 1280×720 @30 FPS             |
+  | JPEG Frame Size (720p)      | ~100-150 KB (D455)           |
+  | End-to-End Latency          | ~150 ms (capture→display)    |
+  | Pose Data Packet Size       | 56 bytes/frame               |
 
 ---
 
 ### Known Issues
+
+- **Green/purple tint on video**: If upgrading from the old MediaCodec H.264 pipeline, ensure:
+  - `RawImage.material` is set to `Default UI Material` (not `OESYUVTexture.mat`)
+  - `SampleRT.shader` has YUV→RGB conversion block removed (JPEG source is already RGB)
+
+- **Image upside-down**: Remove `final_y = 1.0 - final_y` flip in `SampleRT.shader` — the OES texture flip is not needed for JPEG/RGB sources
 
 - Unity Compatibility
 

@@ -1,0 +1,193 @@
+Mar  4 15:41:43 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Mar  4 15:41:50 localhost runit: URControl stopped with exit code: 1
+Mar  4 15:41:50 localhost runit: URControl stopped with exit code: 1
+Mar  4 15:42:34 localhost runit: URControl stopped with exit code: 1
+Mar  4 15:42:34 localhost runit: URControl stopped with exit code: 1
+Mar  4 16:18:15 ur-20255500273 kernel: hid-generic 0003:7374:1278.0002: device has no listeners, quitting
+Mar  4 17:18:03 ur-20255500273 kernel: sd 1:0:0:0: [sdb] No Caching mode page found
+Mar  4 17:18:03 ur-20255500273 kernel: sd 1:0:0:0: [sdb] Assuming drive cache: write through
+Mar  4 21:48:38 ur-20255500273 atd[9765]: Exec failed for mail command: No such file or directory
+Mar  4 21:49:04 ur-20255500273 kernel: sd 1:0:0:0: [sdb] No Caching mode page found
+Mar  4 21:49:04 ur-20255500273 kernel: sd 1:0:0:0: [sdb] Assuming drive cache: write through
+Apr 23 08:33:02 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Apr 28 10:10:27 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Apr 29 03:52:32 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Apr 29 12:13:15 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Apr 30 03:44:59 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  2 03:24:37 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  6 03:23:30 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  7 03:34:07 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  8 03:34:36 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  9 06:27:23 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May 12 04:33:04 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May 15 04:06:44 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May 22 09:24:20 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun  2 03:31:01 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun  3 03:39:53 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun  4 11:34:26 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun  6 04:47:30 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 10 12:49:33 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 12 11:21:50 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 13 13:02:48 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 16 04:07:06 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 16 13:11:59 localhost kernel: igb 0000:05:00.0: exceed max 2 second
+Jun 18 10:35:33 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 19 05:46:30 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 20 03:52:14 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 23 03:35:32 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 24 11:57:26 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 25 08:43:18 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 26 05:31:14 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 26 11:17:02 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 27 03:37:50 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 27 11:31:02 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun 30 05:05:36 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul  2 03:36:44 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul  8 04:25:41 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul  8 11:35:47 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul  9 07:59:36 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 10 03:47:34 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 11 08:31:36 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 14 08:59:42 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 15 03:38:02 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 15 04:08:43 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 15 04:14:26 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 15 08:46:56 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 16 03:43:33 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 16 13:25:22 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 17 03:39:56 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 18 08:18:42 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 21 03:46:13 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 22 05:49:31 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 23 05:16:56 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 28 04:53:30 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 28 12:39:38 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 29 11:15:32 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 30 05:20:52 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jul 31 04:24:09 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug  1 04:47:59 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug  4 08:13:15 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug  5 15:05:10 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug 13 08:16:38 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug 14 09:57:00 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug 15 10:00:13 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug 18 09:46:12 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug 19 10:09:13 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug 20 04:20:52 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug 21 05:11:13 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug 22 03:43:40 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug 27 08:08:05 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug 29 05:00:45 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Aug 30 09:03:07 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Sep  1 04:21:06 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Sep  2 08:26:31 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Sep  5 04:18:21 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Sep  5 11:26:01 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Oct  3 04:16:20 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Oct  6 04:06:32 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Oct  8 04:43:36 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Oct 16 04:58:38 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Oct 17 04:41:44 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Oct 20 08:38:41 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Oct 21 07:50:48 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Oct 22 04:21:21 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Oct 23 04:39:49 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Oct 27 02:56:22 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Oct 30 10:36:55 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Oct 31 03:32:52 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov  3 03:56:55 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov  5 09:36:35 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov  6 07:46:27 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov  7 03:15:35 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov  7 03:15:38 localhost kernel: igb 0000:05:00.0: exceed max 2 second
+Nov 10 02:54:30 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 11 04:57:27 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 11 05:08:11 localhost kernel: [drm:intel_pipe_update_end [i915]] *ERROR* Atomic update failure on pipe A (start=39880 end=39881) time 114 us, min 795, max 799, scanline start 793, end 800
+Nov 11 10:00:31 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 12 03:22:12 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 13 04:01:15 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 13 09:10:32 localhost kernel: sd 2:0:0:0: [sda] No Caching mode page found
+Nov 13 09:10:32 localhost kernel: sd 2:0:0:0: [sda] Assuming drive cache: write through
+Nov 13 09:22:21 localhost kernel: sd 2:0:0:0: [sda] No Caching mode page found
+Nov 13 09:22:21 localhost kernel: sd 2:0:0:0: [sda] Assuming drive cache: write through
+Nov 13 09:22:34 localhost kernel: sd 2:0:0:0: [sda] No Caching mode page found
+Nov 13 09:22:34 localhost kernel: sd 2:0:0:0: [sda] Assuming drive cache: write through
+Nov 13 09:22:37 localhost kernel: sd 2:0:0:0: [sda] No Caching mode page found
+Nov 13 09:22:37 localhost kernel: sd 2:0:0:0: [sda] Assuming drive cache: write through
+Nov 13 09:22:45 localhost kernel: sd 2:0:0:0: [sda] No Caching mode page found
+Nov 13 09:22:45 localhost kernel: sd 2:0:0:0: [sda] Assuming drive cache: write through
+Nov 13 09:22:47 localhost kernel: sd 2:0:0:0: [sda] No Caching mode page found
+Nov 13 09:22:47 localhost kernel: sd 2:0:0:0: [sda] Assuming drive cache: write through
+Nov 13 09:22:51 localhost kernel: sd 2:0:0:0: [sda] No Caching mode page found
+Nov 13 09:22:51 localhost kernel: sd 2:0:0:0: [sda] Assuming drive cache: write through
+Nov 13 09:25:22 localhost kernel: sd 2:0:0:0: [sda] No Caching mode page found
+Nov 13 09:25:22 localhost kernel: sd 2:0:0:0: [sda] Assuming drive cache: write through
+Nov 13 09:28:34 localhost systemd-udevd[8324]: inotify_add_watch(6, /dev/sda, 10) failed: No such file or directory
+Nov 14 03:34:16 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 17 05:45:43 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 17 09:32:06 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 18 03:50:31 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 19 03:52:44 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 20 04:19:47 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 21 05:58:24 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 21 05:58:25 localhost kernel: igb 0000:05:00.0: exceed max 2 second
+Nov 21 08:36:16 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 21 09:12:09 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 21 09:27:35 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 21 10:20:45 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 25 04:04:59 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 26 03:48:41 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Nov 26 04:25:31 localhost kernel: igb 0000:05:00.0: exceed max 2 second
+Nov 26 11:15:30 localhost kernel: igb 0000:05:00.0: exceed max 2 second
+Dec  1 02:37:39 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Dec  2 03:40:31 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Dec  2 03:40:33 localhost kernel: igb 0000:05:00.0: exceed max 2 second
+Dec  5 02:41:31 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Dec  5 02:41:39 localhost kernel: igb 0000:05:00.0: exceed max 2 second
+Dec  8 05:53:53 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Dec  9 03:19:10 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Dec  9 05:41:58 localhost kernel: igb 0000:05:00.0: exceed max 2 second
+Dec 17 03:15:05 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Dec 18 04:04:44 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Dec 19 07:17:55 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Dec 22 02:48:44 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Dec 24 04:21:49 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Dec 29 05:05:29 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Dec 30 04:31:23 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Dec 31 03:01:54 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan  2 04:28:13 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan  2 08:02:38 localhost kernel: igb 0000:05:00.0: exceed max 2 second
+Jan  5 03:02:17 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan  5 03:02:25 localhost kernel: igb 0000:05:00.0: exceed max 2 second
+Jan  7 03:26:59 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan  8 03:17:20 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan 13 03:09:24 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan 14 03:23:10 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan 15 03:20:41 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan 16 03:08:40 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan 19 03:45:08 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan 21 03:15:47 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan 26 07:11:50 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan 27 07:55:15 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan 29 07:46:51 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jan 30 03:22:04 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Feb  2 05:11:06 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Mar 25 03:54:09 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Apr 23 04:47:53 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  8 08:26:31 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  8 09:38:23 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  8 10:56:28 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  8 10:58:47 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  8 12:50:10 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  8 12:59:13 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  8 13:04:13 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  8 13:13:55 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+May  8 13:16:14 localhost kernel: hid-generic 0003:03EB:214E.0003: device has no listeners, quitting
+Jun  5 05:34:50 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun  5 05:41:11 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun  5 06:14:48 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun  5 06:22:13 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun  5 08:17:45 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun  5 08:22:23 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun  5 08:28:56 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting
+Jun  5 08:44:01 localhost kernel: hid-generic 0003:03EB:214E.0001: device has no listeners, quitting

@@ -168,11 +168,12 @@ public partial class UICameraCtrl : MonoBehaviour
 
         yield return new WaitForSeconds(0.1f);
 
-        if (TcpClient.Status != ClientStatus.Connected)
-        {
-            // initialize TcpClient, server IP is the video source IP
-            TcpManager.Instance.StartClient(ip);
-        }
+        // Always reconnect: the underlying Java socket can close without firing
+        // onDisconnected, leaving Status stale at Connected and every send after
+        // that failing with "Socket closed".
+        TcpClient.Disconnect();
+        yield return new WaitForSeconds(0.1f);
+        TcpManager.Instance.StartClient(ip);
 
         yield return new WaitForSeconds(0.5f);
 

@@ -7,6 +7,7 @@ using LitJson;
 using Network;
 using Robot;
 using UnityEngine.UI;
+using UnityEngine.XR;
 
 
 /// <summary>
@@ -33,6 +34,10 @@ public class RemoteCameraWindow : MonoBehaviour
     // public CustomButton listenBtn;
 
     public RobotVisionUnityPluginQuest questPlugin;
+
+    public SetLERE setLere;
+
+    private bool _wasCloseButtonPressed;
 
     private void Awake()
     {
@@ -65,6 +70,15 @@ public class RemoteCameraWindow : MonoBehaviour
         // StartCoroutine(OnStartListen(port));
     }
 
+    private void OnEnable()
+    {
+        // Treat A as held on open so a button still down from the opening
+        // interaction can't immediately close the window.
+        var rightController = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
+        rightController.TryGetFeatureValue(CommonUsages.primaryButton, out bool pressed);
+        _wasCloseButtonPressed = pressed;
+    }
+
     private void OnDisable()
     {
         MediaDecoder.release();
@@ -81,8 +95,18 @@ public class RemoteCameraWindow : MonoBehaviour
         // listenBtn.SetOn(false);
         // send close event to server
         NetworkCommander.Instance.CloseCamera();
-        // Clean up plugin
-        questPlugin.CleanupPlugin();
+        // Clean up plugin — null on Quest, where the JPEG/UDP path replaces it
+        if (questPlugin != null)
+        {
+            questPlugin.CleanupPlugin();
+        }
+        // CanvCE is a separate root object; disabling this window stops SetLERE
+        // from running, so the video plane must be hidden explicitly or it
+        // stays frozen on screen covering the view.
+        if (setLere != null)
+        {
+            setLere.ResetCanvases();
+        }
         gameObject.SetActive(false);
     }
 
@@ -126,17 +150,18 @@ public class RemoteCameraWindow : MonoBehaviour
 
     private void Update()
     {
-        // No need for quest
-        // if (_texture != null)
-        // {
-        //     if (Application.platform == RuntimePlatform.Android)
-        //     {
-        //         if (MediaDecoder.isUpdateFrame())
-        //         {
-        //             MediaDecoder.updateTexture();
-        //             GL.InvalidateState();
-        //         }
-        //     }
-        // }
+        // The video plane covers the view, so the on-screen close button can be
+        // hard to hit — the right-hand A button closes the window as well.
+        var rightController = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
+        rightController.TryGetFeatureValue(CommonUsages.primaryButton, out bool pressed);
+
+        if (!pressed && _wasCloseButtonPressed)
+        {
+            _wasCloseButtonPressed = false;
+            OnCloseBtn();
+            return;
+        }
+
+        _wasCloseButtonPressed = pressed;
     }
 }

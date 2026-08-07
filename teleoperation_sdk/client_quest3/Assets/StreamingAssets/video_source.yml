@@ -38,27 +38,31 @@
 
 - name: "REALSRENSE"
   camera: "REALSENSE"
-  description: "RealSense Stereo Camera Video Stream Source"
+  description: "RealSense Mono RGB Video Stream Source"
   properties:
+    - name: "stereoMode"
+      type: "float"
+      description: "0 = mono single frame, 1 = side-by-side stereo"
+      value: 0.0
     - name: "visibleRatio"
       type: "float"
-      description: "Visible ratio for the shader"
-      value: 0.46747
+      description: "Unused in mono mode; aspect fit is computed from the texture"
+      value: 1.0
     - name: "contentRatio"
       type: "float"
-      description: "Content ratio for the shader"
-      value: 1.58458
+      description: "Unused in mono mode; aspect fit is computed from the texture"
+      value: 1.0
     - name: "heightCompressionFactor"
       type: "float"
-      description: "Height compression factor for the shader"
-      value: 1.777778 # 16/9
+      description: "Unused in mono mode; aspect fit is computed from the texture"
+      value: 1.0
     - name: "RawImageRectSize"
       type: "string"
-      description: "Size of the RawImage rectangle for the stereo view"
-      value: "600x168.75"
+      description: "Size of the RawImage rectangle (4:3 to match the mono source)"
+      value: "600x450"
     - name: "CamWidth"
       type: "int"
-      description: "Camera width for the video stream (side-by-side)"
+      description: "Camera width for the video stream (single frame, not packed)"
       value: 640
     - name: "CamHeight"
       type: "int"

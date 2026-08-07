@@ -1,0 +1,301 @@
+{
+  "reportId" : "recording20260605_08_45_12",
+  "reportType" : "CONTROLLER_REPORTED_ERROR",
+  "files" : [ {
+    "path" : "summary.log",
+    "size" : 2792,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf.UR3",
+    "size" : 1615,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/ps",
+    "size" : 25816,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration_trajectory_level0_UR16G5.ct",
+    "size" : 28214,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_motor_calibration_id4.txt",
+    "size" : 28643,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration_trajectory_level0_UR30G5.ct",
+    "size" : 29699,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/global_variables.csv",
+    "size" : 29699,
+    "mimeType" : "text/csv; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf.UR20",
+    "size" : 31621,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration_trajectory_level0_UR20G5.ct",
+    "size" : 32728,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_size5_gen6.conf",
+    "size" : 33124,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/ftsensor.conf",
+    "size" : 34294,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_size4_gen6.conf",
+    "size" : 34693,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf.UR3_DC",
+    "size" : 36311,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/.last_seen_joint_positions.conf",
+    "size" : 36593,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_size2_eseries.conf",
+    "size" : 36998,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/gui.properties",
+    "size" : 37077,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration_trajectory_level1_UR30G5.ct",
+    "size" : 49875,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf.UR30",
+    "size" : 51741,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf.UR10",
+    "size" : 53639,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_size0_eseries.conf",
+    "size" : 54029,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_info.txt",
+    "size" : 55082,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/robot_calibration_summary.txt",
+    "size" : 60155,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf.UR20_DC",
+    "size" : 62079,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf.UR16",
+    "size" : 63974,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_motor_calibration_id3.txt",
+    "size" : 64403,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_null.conf",
+    "size" : 64847,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf.UR10_DC",
+    "size" : 66747,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/system.environment.txt",
+    "size" : 71112,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/critical",
+    "size" : 89965,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration_trajectory_level1_UR16G5.ct",
+    "size" : 119794,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_motor_calibration_id2.txt",
+    "size" : 120223,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_size4_eseries.conf",
+    "size" : 120647,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration_trajectory_level1_UR20G5.ct",
+    "size" : 133832,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_size1_eseries.conf",
+    "size" : 134239,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration.conf",
+    "size" : 135283,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf",
+    "size" : 136928,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration_trajectory_level0_UR3G5.ct",
+    "size" : 139537,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/firmware_appinfo.yaml",
+    "size" : 147954,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf.UR5",
+    "size" : 149599,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/kern.log",
+    "size" : 1198153,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration_trajectory_level0_UR10G5.ct",
+    "size" : 1202779,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/program_execution.txt",
+    "size" : 1202812,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/ur-robotarm-serial",
+    "size" : 1203034,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/realtimedata.csv",
+    "size" : 4202239,
+    "mimeType" : "text/csv; charset=utf-8; header=present"
+  }, {
+    "path" : "files/urcontrol/joint_motor_calibration_id0.txt",
+    "size" : 4202668,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration_trajectory_level0_UR5G5.ct",
+    "size" : 4205080,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/server.conf",
+    "size" : 4205131,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_size2_5_gen6.conf",
+    "size" : 4205530,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration.conf.bak_07-11-2025_03:17:02",
+    "size" : 4206571,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/polyscope.threads.txt",
+    "size" : 4210753,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/log_history.txt",
+    "size" : 5259285,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/default.installation",
+    "size" : 5262217,
+    "mimeType" : "application/x-gzip"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf.UR30_DC",
+    "size" : 5264085,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/URControl.log.0",
+    "size" : 5281460,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/df",
+    "size" : 5282014,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/default.variables",
+    "size" : 5282098,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf.UR16_DC",
+    "size" : 5283995,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/polyscope.in.memory.program.urp",
+    "size" : 5284254,
+    "mimeType" : "application/x-gzip"
+  }, {
+    "path" : "files/urcontrol/joint_motor_calibration_id5.txt",
+    "size" : 5284683,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration.log",
+    "size" : 5286421,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/system/rescue.log",
+    "size" : 5288105,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/polyscope.log",
+    "size" : 5703077,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/.tcp.conf",
+    "size" : 5703088,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_size3_eseries.conf",
+    "size" : 5703505,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/safety.conf",
+    "size" : 5707364,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/histogram.properties",
+    "size" : 5710469,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration_trajectory_level1_UR3G5.ct",
+    "size" : 5742195,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration_trajectory_level1_UR5G5.ct",
+    "size" : 5776992,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/joint_motor_calibration_id1.txt",
+    "size" : 5777421,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/interpreter/interpreter.0.log",
+    "size" : 5777485,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/Xorg.0.log",
+    "size" : 5798841,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/calibration_trajectory_level1_UR10G5.ct",
+    "size" : 5825592,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/interpreter/interpreter.log",
+    "size" : 5825592,
+    "mimeType" : "text/plain; charset=utf-8"
+  }, {
+    "path" : "files/urcontrol/urcontrol.conf.UR5_DC",
+    "size" : 5827239,
+    "mimeType" : "text/plain; charset=utf-8"
+  } ]
+}

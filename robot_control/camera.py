@@ -790,10 +790,15 @@ class CameraModule(RobotModule):
         """
 
         def __init__(self, source_id: str, serial: str, fallback_device: str,
-                     width: int, height: int, fps: int):
+                     width: int, height: int, fps: int, model: str = ""):
             super().__init__(source_id, "realsense", fallback_device, width, height, fps)
             self._serial = serial
             self._rs_pipeline = None
+            # Seed the model name from enumeration so resolve_source() can match
+            # on it before the pipeline has ever started.  _start_ffmpeg()
+            # overwrites this with the SDK's own name once running.
+            if model:
+                self._device_name = model
 
         def _start_ffmpeg(self) -> None:
             self._kill_ffmpeg()
@@ -1078,6 +1083,7 @@ class CameraModule(RobotModule):
             state["camera_modes"] = list(self.VALID_MODES)
             return state
 
+
     # ── CameraModule (outer) ──────────────────────────────────────────────
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -1130,25 +1136,24 @@ class CameraModule(RobotModule):
             return CameraModule.OrbbecSource(sid, device, w, h, f)
         if stype == "tcp":
             return CameraModule.CameraSource(sid, "tcp", device, w, h, f)
-        if stype == "usb":
-            if _HAS_REALSENSE:
-                try:
-                    rs_devices = detect_realsense_devices([device])
-                    if rs_devices:
-                        rs_info = rs_devices[0]
-                        return CameraModule.RealSenseSource(
-                            sid, rs_info["serial"], device, w, h, f)
-                except Exception:
-                    pass
-            if _HAS_ORBBEC_DETECT:
-                try:
-                    ob_devices = detect_orbbec_devices([device])
-                    if ob_devices:
-                        return CameraModule.OrbbecSource(sid, device, w, h, f)
-                except Exception:
-                    pass
+        if _HAS_REALSENSE and stype == "usb":
+            try:
+                rs_devices = detect_realsense_devices([device])
+                if rs_devices:
+                    rs_info = rs_devices[0]
+                    return CameraModule.RealSenseSource(
+                        sid, rs_info["serial"], device, w, h, f,
+                        rs_info.get("name", ""))
+            except Exception:
+                pass
+        if _HAS_ORBBEC_DETECT and stype == "usb":
+            try:
+                ob_devices = detect_orbbec_devices([device])
+                if ob_devices:
+                    return CameraModule.OrbbecSource(sid, device, w, h, f)
+            except Exception:
+                pass
         return CameraModule.CameraSource(sid, "usb", device, w, h, f)
-
     def _auto_build_sources(self) -> None:
         """Scan /dev/video* and create sources.  RealSense cameras use the
         pyrealsense2 SDK for RGB colour; Orbbec Femto Bolt uses OrbbecSource
@@ -1197,7 +1202,8 @@ class CameraModule(RobotModule):
                 rs_serials_assigned.add(rs_info["serial"])
                 self._sources[sid] = CameraModule.RealSenseSource(
                     sid, rs_info["serial"], device,
-                    self._width, self._height, self._fps)
+                    self._width, self._height, self._fps,
+                    rs_info.get("name", ""))
                 log.info("[Camera] auto-detect: %s → RealSense %s (serial=%s)",
                          sid, rs_info["name"], rs_info["serial"])
             elif device in ob_device_set and not ob_assigned:
@@ -1209,7 +1215,6 @@ class CameraModule(RobotModule):
             else:
                 self._sources[sid] = CameraModule.CameraSource(
                     sid, "usb", device, self._width, self._height, self._fps)
-
     def rescan(self) -> List[Dict[str, Any]]:
         """Re-scan for cameras and start sources for newly discovered devices."""
         detected = _detect_cameras()
@@ -1246,7 +1251,8 @@ class CameraModule(RobotModule):
                     rs_assigned.add(rs_info["serial"])
                     src = CameraModule.RealSenseSource(
                         sid, rs_info["serial"], device,
-                        self._width, self._height, self._fps)
+                        self._width, self._height, self._fps,
+                        rs_info.get("name", ""))
                 elif device in ob_device_set and not ob_assigned:
                     ob_assigned = True
                     src = CameraModule.OrbbecSource(
@@ -1260,7 +1266,6 @@ class CameraModule(RobotModule):
                 log.info("[Camera] rescan: added %s → %s", sid, device)
         log.info("[Camera] rescan: %d new sources (total=%d)", new_count, len(self._sources))
         return self.get_device_list()
-
     # ── RobotModule metadata ──────────────────────────────────────────────
 
     @property
@@ -1325,10 +1330,33 @@ class CameraModule(RobotModule):
                     "source_type": s._type,
                     "device_name": s._device_name,
                     "device": s._device,
+                    "serial": getattr(s, "_serial", ""),
                     "camera_mode": getattr(s, "get_mode", lambda: None)(),
                 }
                 for sid, s in self._sources.items()
             ]
+
+    def resolve_source(self, hint: str) -> Optional[str]:
+        """Map a source id, serial number, or model substring to a source id.
+
+        Source ids are assigned by enumeration order, so they shift when a
+        camera is replugged.  Serials don't — callers that need to pin a
+        specific physical camera should pass one.
+        """
+        if not hint:
+            return None
+        hint = hint.strip()
+        with self._lock:
+            if hint in self._sources:
+                return hint
+            for sid, s in self._sources.items():
+                if getattr(s, "_serial", "") == hint:
+                    return sid
+            needle = hint.lower()
+            for sid, s in self._sources.items():
+                if needle in (s._device_name or "").lower():
+                    return sid
+        return None
 
     # ── SocketIO handlers ─────────────────────────────────────────────────
 
@@ -1377,7 +1405,6 @@ class CameraModule(RobotModule):
             source.set_mode(mode)
             emit("camera_mode_result", {"ok": True, "device": device,
                  "mode": source.get_mode()})
-            # Push updated device list so frontend knows current mode
             emit("camera_device_list", {"devices": self.get_device_list()})
         except Exception as exc:
             log.error("[Camera:%s] mode switch failed: %s", source._id, exc)

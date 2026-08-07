@@ -31,7 +31,9 @@ Safety:
 
 import logging
 import math
+import os
 import socket
+import subprocess
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -40,7 +42,13 @@ from robot_control.module_base import RobotModule
 
 log = logging.getLogger(__name__)
 
-from teleoperation_sdk.vr_backends import VRBackend, create_vr_backend
+# Lazy import — gracefully degrade if SDK not installed
+try:
+    import xrobotoolkit_sdk as xrt
+    _XRT_AVAILABLE = True
+except ImportError:
+    xrt = None
+    _XRT_AVAILABLE = False
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
@@ -61,9 +69,15 @@ HEAD_TRACK_HZ = 20.0              # head→gimbal update rate
 HEAD_GIMBAL_DEADBAND = 0.3        # degrees; default deadband (adjustable via GUI)
 HEAD_EMA_ALPHA = 0.25             # EMA smoothing default (adjustable via GUI)
 HEAD_RATE_LIMIT = 300.0           # deg/s; max gimbal target velocity (adjustable via GUI)
-HEAD_DEADZONE = 5.0              # degrees; hysteresis dead zone (only move when head exceeds this)
+HEAD_DEADZONE = 3.0              # degrees; hysteresis dead zone (only move when head exceeds this)
 HEAD_PRECISION = 0.5             # degrees; quantize target to this step (eliminate encoder hunting)
-HEAD_COOLDOWN = 0.25             # seconds; minimum interval between gimbal move commands
+
+# ── video bridge (RealSense → Quest 3 JPEG/UDP) ───────────────────────────────
+
+VIDEO_BRIDGE_SCRIPT = "/home/yu/robot_code/camera_sdk/start_realsense_quest.sh"
+VIDEO_BRIDGE_LOG = "/tmp/realsense_bridge.log"
+VIDEO_CONTROL_PORT = 13579        # Quest connects here to request the stream
+VIDEO_UDP_PORT = 10004            # JPEG frames pushed to the Quest on this port
 
 
 def _quat_to_yaw_pitch(qx: float, qy: float, qz: float, qw: float) -> tuple:
@@ -106,10 +120,6 @@ class TeleopModule(RobotModule):
         self._ws_min = cfg.get("workspace_min_xyz", DEFAULT_WORKSPACE_MIN)
         self._ws_max = cfg.get("workspace_max_xyz", DEFAULT_WORKSPACE_MAX)
 
-        # VR backend selection: "xrt" (WiFi) | "adb" (USB) | "xr_protocol" (TCP)
-        self._vr_backend_name = cfg.get("vr_backend", "xrt")
-        self._vr_backend: Optional[VRBackend] = None
-
         # Head tracking → gimbal config
         self._head_to_gimbal_enabled = cfg.get("head_to_gimbal", False)
         self._head_yaw_sign = cfg.get("head_yaw_sign", 1)
@@ -124,6 +134,26 @@ class TeleopModule(RobotModule):
         # Optional gimbal limit overrides (None = use gimbal module defaults)
         self._gimbal_yaw_limits_override = cfg.get("gimbal_yaw_limits", None)
         self._gimbal_pitch_limits_override = cfg.get("gimbal_pitch_limits", None)
+
+        # Video bridge (RealSense → Quest 3)
+        vcfg = cfg.get("video_bridge", {}) or {}
+        self._video_script = vcfg.get("script", VIDEO_BRIDGE_SCRIPT)
+        self._video_log = vcfg.get("log", VIDEO_BRIDGE_LOG)
+        self._video_control_port = int(vcfg.get("control_port", VIDEO_CONTROL_PORT))
+        self._video_udp_port = int(vcfg.get("udp_port", VIDEO_UDP_PORT))
+        self._video_autostart = bool(vcfg.get("autostart", False))
+        # Which camera the bridge forwards by default.  Resolved through the
+        # camera module at use time, so a model name survives replug (source
+        # ids don't — they're assigned by enumeration order).
+        self._video_default_camera = vcfg.get("default_camera", "D455")
+
+        # Bridge status is polled by shelling out, so it is cached between
+        # state broadcasts (which run far faster than the process can change).
+        self._video_lock = threading.Lock()
+        self._video_action_lock = threading.Lock()
+        self._video_cache = {"running": False, "pid": 0, "client": "",
+                             "source": "", "error": ""}
+        self._video_cache_at = 0.0
 
         # Runtime state (thread-safe via _lock)
         self._lock = threading.RLock()
@@ -166,8 +196,6 @@ class TeleopModule(RobotModule):
         self._head_dz_pitch = 0.0
         self._head_pose_available = False
         self._last_head_track = 0.0
-        self._last_gimbal_move = 0.0   # cooldown timer to suppress oscillation
-        self._head_cooldown = float(cfg.get("head_cooldown", HEAD_COOLDOWN))
 
         # URScript socket
         self._ur_sock: Optional[socket.socket] = None
@@ -180,10 +208,6 @@ class TeleopModule(RobotModule):
         # Data logging
         self._data_log_enabled = False
         self._data_log: List[Dict] = []
-
-        # UR5e status push (for XRProtocolBackend bidirectional comms)
-        self._status_push_thread: Optional[threading.Thread] = None
-        self._status_push_running = False
 
         # Background thread
         self._thread: Optional[threading.Thread] = None
@@ -202,7 +226,6 @@ class TeleopModule(RobotModule):
         return {
             "connected": False,
             "xr_initialized": False,
-            "vr_backend": "xrt",
             "active": False,
             "tracking": False,
             "calibrated": False,
@@ -230,15 +253,22 @@ class TeleopModule(RobotModule):
             "head_deadzone": HEAD_DEADZONE,
             "head_precision": HEAD_PRECISION,
             "gimbal_yaw_limits": [-90, 90],
-            "gimbal_pitch_limits": [-90, 60],
+            "gimbal_pitch_limits": [-50, 60],
+            "video_running": False,
+            "video_pid": 0,
+            "video_client": "",
+            "video_source": "",
+            "video_control_port": VIDEO_CONTROL_PORT,
+            "video_udp_port": VIDEO_UDP_PORT,
+            "video_error": "",
         }
 
     def get_state(self) -> Dict[str, Any]:
+        video = self._video_status()
         with self._lock:
             return {
                 "connected": self._connected,
                 "xr_initialized": self._xr_initialized,
-                "vr_backend": self._vr_backend_name,
                 "active": self._active,
                 "tracking": self._tracking,
                 "calibrated": self._calibrated,
@@ -265,9 +295,15 @@ class TeleopModule(RobotModule):
                 "head_rate_limit": self._head_rate_limit,
                 "head_deadzone": self._head_deadzone,
                 "head_precision": self._head_precision,
-                "head_cooldown": self._head_cooldown,
                 "gimbal_yaw_limits": list(self._effective_yaw_limits()),
                 "gimbal_pitch_limits": list(self._effective_pitch_limits()),
+                "video_running": video["running"],
+                "video_pid": video["pid"],
+                "video_client": video["client"],
+                "video_source": video.get("source", ""),
+                "video_control_port": self._video_control_port,
+                "video_udp_port": self._video_udp_port,
+                "video_error": video["error"],
             }
 
     def get_socketio_handlers(self) -> Dict[str, Any]:
@@ -283,36 +319,35 @@ class TeleopModule(RobotModule):
             "teleop_set_head_gains":        self._on_set_head_gains,
             "teleop_set_gimbal_limits":     self._on_set_gimbal_limits,
             "teleop_set_head_config":       self._on_set_head_config,
+            "teleop_video_start":           self._on_video_start,
+            "teleop_video_stop":            self._on_video_stop,
+            "teleop_video_restart":         self._on_video_restart,
+            "teleop_video_log":             self._on_video_log,
         }
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
     def start(self) -> None:
-        self._vr_backend = create_vr_backend(self._vr_backend_name)
-        if self._vr_backend is None:
-            log.warning("[Teleop] Unknown vr_backend '%s' — stub mode", self._vr_backend_name)
+        # The bridge is a separate process feeding the headset's video window;
+        # it works even when the XR SDK is absent, so start it before bailing.
+        if self._video_autostart:
+            self._on_video_start()
+
+        if not _XRT_AVAILABLE:
+            log.warning("[Teleop] xrobotoolkit_sdk not available — stub mode")
             self._connected = False
             return
 
-        if not self._vr_backend.init():
-            log.warning("[Teleop] VR backend '%s' init failed — stub mode", self._vr_backend_name)
+        try:
+            xrt.init()
+            self._xr_initialized = True
+            self._connected = True
+            log.info("[Teleop] XR SDK initialized")
+        except Exception as e:
+            log.error("[Teleop] XR SDK init failed: %s", e)
+            self._xr_initialized = False
             self._connected = False
             return
-
-        self._xr_initialized = True
-        self._connected = True
-        log.info("[Teleop] VR backend '%s' initialized", self._vr_backend_name)
-
-        # Register bidirectional command callback (XRProtocolBackend)
-        if hasattr(self._vr_backend, 'set_command_callback'):
-            self._vr_backend.set_command_callback(self._on_vr_command)
-
-        # Start status push thread for bidirectional backends
-        if hasattr(self._vr_backend, 'send_ur5e_status'):
-            self._status_push_running = True
-            self._status_push_thread = threading.Thread(
-                target=self._status_push_loop, daemon=True, name="teleop-status")
-            self._status_push_thread.start()
 
         self._running = True
         self._thread = threading.Thread(target=self._control_loop, daemon=True, name="teleop-ctrl")
@@ -321,26 +356,22 @@ class TeleopModule(RobotModule):
 
     def stop(self) -> None:
         self._running = False
-        self._status_push_running = False
         if self._active:
             self._send_urscript("stopj(2.0)\n")
             self._gating(False)
 
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
-        if self._status_push_thread and self._status_push_thread.is_alive():
-            self._status_push_thread.join(timeout=2.0)
 
         self._disconnect_ur()
 
-        if self._vr_backend is not None:
+        if self._xr_initialized:
             try:
-                self._vr_backend.close()
+                xrt.close()
             except Exception:
                 pass
-            self._vr_backend = None
+            self._xr_initialized = False
 
-        self._xr_initialized = False
         self._connected = False
         self._active = False
         self._tracking = False
@@ -362,7 +393,7 @@ class TeleopModule(RobotModule):
     def _on_enable(self, _data: dict = None, emit=None) -> None:
         if not self._xr_initialized:
             if emit:
-                emit("error", {"msg": "VR backend not initialized"})
+                emit("error", {"msg": "XR SDK not initialized"})
             return
         if self._is_fault:
             if emit:
@@ -384,14 +415,17 @@ class TeleopModule(RobotModule):
 
     def _on_calibrate(self, _data: dict = None, emit=None) -> None:
         """Record current controller pose as reference offset to current arm position."""
-        if self._vr_backend is None:
+        if not self._xr_initialized:
             if emit:
-                emit("error", {"msg": "VR backend not initialized"})
+                emit("error", {"msg": "XR SDK not initialized"})
             return
 
         # Read current controller pose
         try:
-            ctrl = self._vr_backend.get_controller_pose(self._arm_controller)
+            if self._arm_controller == "left":
+                ctrl = xrt.get_left_controller_pose()
+            else:
+                ctrl = xrt.get_right_controller_pose()
         except Exception as e:
             log.warning("[Teleop] Calibrate: failed to read controller: %s", e)
             return
@@ -425,7 +459,7 @@ class TeleopModule(RobotModule):
     def _on_gimbal_track_enable(self, _data: dict = None, emit=None) -> None:
         if not self._xr_initialized:
             if emit:
-                emit("error", {"msg": "VR backend not initialized"})
+                emit("error", {"msg": "XR SDK not initialized"})
             return
         # Probe head pose availability (first successful read sets _head_pose_available)
         head = self._read_head_pose()
@@ -440,9 +474,8 @@ class TeleopModule(RobotModule):
             self._gimbal_target_pitch = float('inf')
             self._head_dz_yaw = float('inf')
             self._head_dz_pitch = float('inf')
-            # Reset EMA filter and cooldown to avoid stale values
+            # Reset EMA filter to avoid stale values from previous session
             self._ema_initialized = False
-            self._last_gimbal_move = 0.0
         log.info("[Teleop] Gimbal head tracking enabled")
 
     def _on_gimbal_track_disable(self, _data: dict = None, emit=None) -> None:
@@ -454,7 +487,7 @@ class TeleopModule(RobotModule):
         """Record current head orientation as the gimbal reference offset."""
         if not self._xr_initialized:
             if emit:
-                emit("error", {"msg": "VR backend not initialized"})
+                emit("error", {"msg": "XR SDK not initialized"})
             return
         head = self._read_head_pose()
         if head is None:
@@ -534,11 +567,8 @@ class TeleopModule(RobotModule):
                 self._head_deadzone = max(0.5, min(15.0, float(data["deadzone"])))
             if "precision" in data:
                 self._head_precision = max(0.1, min(2.0, float(data["precision"])))
-            if "cooldown" in data:
-                self._head_cooldown = max(0.05, min(2.0, float(data["cooldown"])))
-        log.info("[Teleop] Head config: dz=%.1f° db=%.2f° sm=%.2f rate=%.0f°/s prec=%.1f° cool=%.2fs",
-                 self._head_deadzone, self._head_deadband, self._head_smoothing,
-                 self._head_rate_limit, self._head_cooldown)
+        log.info("[Teleop] Head config: dz=%.1f° db=%.2f° sm=%.2f rate=%.0f°/s prec=%.1f°",
+                 self._head_deadzone, self._head_deadband, self._head_smoothing, self._head_rate_limit)
         if emit:
             emit("head_config_updated", {
                 "head_deadband": self._head_deadband,
@@ -546,97 +576,177 @@ class TeleopModule(RobotModule):
                 "head_rate_limit": self._head_rate_limit,
                 "head_deadzone": self._head_deadzone,
                 "head_precision": self._head_precision,
-                "head_cooldown": self._head_cooldown,
             })
 
-    # ── VR command callback (Quest → Python bidirectional) ─────────────────
+    # ── video bridge (RealSense → Quest 3) ─────────────────────────────────
 
-    def _on_vr_command(self, function_name: str, value: dict) -> None:
-        """Handle function messages from Quest (non-Tracking)."""
-        log.info("[Teleop] VR command: %s %s", function_name, value)
-
-        if function_name == "UR5eControl":
-            action = value.get("action", "")
-            if action == "connect":
-                self._handle_ur5e_connect(value)
-            elif action == "disconnect":
-                self._handle_ur5e_disconnect()
-            elif action == "emergency_stop":
-                self.emergency_stop()
-            elif action == "get_status":
-                self._push_ur5e_status()
-            else:
-                log.warning("[Teleop] Unknown UR5e action: %s", action)
-
-    def _handle_ur5e_connect(self, params: dict) -> None:
-        """Handle UR5e connect request from Quest."""
-        new_host = params.get("ip", self._ur_host)
-        self._ur_host = new_host
-        self._disconnect_ur()
-        ok = self._connect_ur()
-        if ok:
-            log.info("[Teleop] UR5e connected to %s (from Quest command)", new_host)
-            self._push_ur5e_status()
-        else:
-            log.warning("[Teleop] UR5e connect failed to %s", new_host)
-            self._push_ur5e_status()
-
-    def _handle_ur5e_disconnect(self) -> None:
-        """Handle UR5e disconnect request from Quest."""
-        with self._lock:
-            self._active = False
-            self._tracking = False
-        self._send_urscript("stopj(2.0)\n")
-        self._gating(False)
-        self._disconnect_ur()
-        log.info("[Teleop] UR5e disconnected (from Quest command)")
-        self._push_ur5e_status()
-
-    def _status_push_loop(self) -> None:
-        """Periodically push UR5e status to Quest (every 500ms)."""
-        while self._status_push_running:
-            time.sleep(0.5)
-            if not self._status_push_running:
-                break
-            self._push_ur5e_status()
-
-    def _push_ur5e_status(self) -> None:
-        """Send current UR5e status to the Quest client."""
-        if not hasattr(self._vr_backend, 'send_ur5e_status'):
-            return
+    def _video_sh(self, action: str, arg: str = None,
+                  timeout: float = 15.0) -> tuple:
+        """Run the bridge control script. Returns (ok, combined_output)."""
+        if not os.path.isfile(self._video_script):
+            return False, f"bridge script not found: {self._video_script}"
+        cmd = ["bash", self._video_script, action]
+        if arg:
+            cmd.append(arg)
         try:
-            self._vr_backend.send_ur5e_status(self.get_ur5e_status())
+            p = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout,
+            )
+            return p.returncode == 0, (p.stdout + p.stderr).strip()
+        except subprocess.TimeoutExpired:
+            return False, f"'{action}' timed out after {timeout:.0f}s"
         except Exception as e:
-            log.debug("[Teleop] Status push failed: %s", e)
+            return False, str(e)
 
-    def get_ur5e_status(self) -> Dict[str, Any]:
-        """Return UR5e robot status for Quest display."""
-        with self._lock:
-            return {
-                "connected": self._connected,
-                "ur_connected": self._ur_sock is not None,
-                "active": self._active,
-                "tracking": self._tracking,
-                "calibrated": self._calibrated,
-                "is_fault": self._is_fault,
-                "fault_text": self._fault_text,
-                "current_joints_deg": list(self._current_joints_deg),
-                "target_joints_deg": list(self._target_joints_deg),
-                "trigger_value": self._trigger_val,
-                "grip_pressed": self._grip_pressed,
-            }
+    def _resolve_video_source(self, hint: str) -> str:
+        """Map a camera hint (id / serial / model) to a live source id.
+
+        Falls back to cam0 so a mis-typed hint still yields video rather than a
+        404 that silently kills the bridge.
+        """
+        hint = (hint or "").strip() or self._video_default_camera
+        cam = None
+        try:
+            cam = getattr(self.robot, "modules", {}).get("camera")
+        except Exception:
+            cam = None
+        if cam is None:
+            log.warning("[Teleop] camera module unavailable — video source "
+                        "hint %r used verbatim", hint)
+            return hint
+        try:
+            sid = cam.resolve_source(hint)
+        except Exception as e:
+            log.warning("[Teleop] resolve_source(%r) failed: %s", hint, e)
+            sid = None
+        if not sid:
+            log.warning("[Teleop] no camera matches %r — falling back to cam0", hint)
+            return "cam0"
+        return sid
+
+    def _video_status(self, force: bool = False) -> Dict[str, Any]:
+        """Cached bridge status. Shelling out per state broadcast would be far
+        too costly, and the process state cannot change that fast anyway."""
+        now = time.time()
+        with self._video_lock:
+            if not force and (now - self._video_cache_at) < 2.0:
+                return dict(self._video_cache)
+
+        ok, out = self._video_sh("status", timeout=8.0)
+        lines = [ln.strip() for ln in out.strip().split("\n") if ln.strip()]
+        source = ""
+        rest = []
+        for ln in lines:
+            if ln.lower().startswith("source:"):
+                source = ln.split(":", 1)[1].strip()
+            else:
+                rest.append(ln)
+        running = ok and bool(rest) and "not running" not in " ".join(rest).lower()
+        pid = 0
+        if running:
+            head = rest[0].split()
+            if head and head[0].isdigit():
+                pid = int(head[0])
+
+        state = {"running": running, "pid": pid,
+                 "client": self._video_last_client(), "source": source,
+                 "error": "" if ok else out}
+        with self._video_lock:
+            self._video_cache = state
+            self._video_cache_at = now
+        return dict(state)
+
+    def _video_last_client(self) -> str:
+        """Most recent Quest IP seen by the bridge, parsed from its log."""
+        try:
+            with open(self._video_log, "r", errors="replace") as f:
+                lines = f.readlines()[-60:]
+        except OSError:
+            return ""
+        for line in reversed(lines):
+            if "Quest" in line and "connected" in line.lower():
+                for tok in line.replace(",", " ").split():
+                    if tok.count(".") == 3 and tok.replace(".", "").isdigit():
+                        return tok
+        return ""
+
+    def _on_video_start(self, data: dict = None, emit=None) -> None:
+        """Ensure the bridge is streaming the requested camera.
+
+        Idempotent by design: if the bridge is already up, the source is
+        switched in place rather than restarting, so the headset keeps its TCP
+        session and only sees a brief frame gap instead of having to
+        re-initiate the stream from inside the HMD.
+        """
+        hint = (data or {}).get("source") or self._video_default_camera
+        src = self._resolve_video_source(hint)
+
+        with self._video_action_lock:
+            was_running = self._video_status(force=True)["running"]
+            if was_running:
+                ok, out = self._video_sh("source", src)
+                action = "source"
+            else:
+                ok, out = self._video_sh("start", src)
+                action = "start"
+            st = self._video_status(force=True)
+
+        if not st["running"]:
+            # The script backgrounds the process and exits 0 regardless, so a
+            # crashed bridge only shows up in its log.
+            detail = self._video_log_tail(12) or out
+            log.error("[Teleop] Video bridge failed to start: %s", detail)
+            if emit:
+                emit("error", {"msg": f"图传启动失败: {detail}"})
+            return
+        log.info("[Teleop] Video bridge %s → source=%s (pid=%s, ctrl=%d, udp=%d)",
+                 action, st["source"] or src, st["pid"],
+                 self._video_control_port, self._video_udp_port)
+        if emit:
+            emit("teleop_video_result", {"action": action, "ok": ok,
+                                         "source": st["source"] or src,
+                                         "msg": out})
+
+    def _on_video_stop(self, _data: dict = None, emit=None) -> None:
+        with self._video_action_lock:
+            ok, out = self._video_sh("stop")
+            self._video_status(force=True)
+        log.info("[Teleop] Video bridge stopped")
+        if emit:
+            emit("teleop_video_result", {"action": "stop", "ok": ok, "msg": out})
+
+    def _on_video_restart(self, _data: dict = None, emit=None) -> None:
+        with self._video_action_lock:
+            self._video_sh("stop")
+            self._video_status(force=True)
+        # Reuse the source already on disk rather than re-resolving, so a
+        # restart never silently moves the feed to a different camera.
+        self._on_video_start({"source": self._video_status(force=True)["source"]},
+                             emit)
+
+    def _on_video_log(self, _data: dict = None, emit=None) -> None:
+        if emit:
+            emit("teleop_video_log", {"text": self._video_log_tail(40)})
+
+    def _video_log_tail(self, n: int = 40) -> str:
+        try:
+            with open(self._video_log, "r", errors="replace") as f:
+                return "".join(f.readlines()[-n:]).strip()
+        except OSError as e:
+            return f"(无法读取 {self._video_log}: {e})"
 
     # ── head tracking ──────────────────────────────────────────────────────
 
     def _read_head_pose(self) -> Optional[List[float]]:
         """Read Quest 3 headset pose. Returns [x, y, z, qx, qy, qz, qw] or None."""
-        if self._vr_backend is None:
+        if not self._xr_initialized:
             return None
         try:
-            pose = self._vr_backend.get_headset_pose()
-            if pose is not None and len(pose) >= 7:
-                self._head_pose_available = True
-                return [float(v) for v in pose[:7]]
+            if hasattr(xrt, 'get_headset_pose'):
+                pose = xrt.get_headset_pose()
+                if pose is not None and len(pose) >= 7:
+                    self._head_pose_available = True
+                    return [float(v) for v in pose[:7]]
         except Exception as e:
             log.debug("[Teleop] Head pose read failed: %s", e)
         return None
@@ -682,10 +792,6 @@ class TeleopModule(RobotModule):
             head_dpitch = abs(self._ema_pitch - self._head_dz_pitch)
             if head_dyaw < self._head_deadzone and head_dpitch < self._head_deadzone:
                 return  # head hasn't moved enough — gimbal stays frozen
-            log.debug("[Teleop] Dead zone passed: head_dyaw=%.1f head_dpitch=%.1f "
-                      "ema=(%.1f,%.1f) dz=(%.1f,%.1f) raw=(%.1f,%.1f)",
-                      head_dyaw, head_dpitch, self._ema_yaw, self._ema_pitch,
-                      self._head_dz_yaw, self._head_dz_pitch, head_yaw, head_pitch)
 
         target_yaw, target_pitch = self._head_to_gimbal(self._ema_yaw, self._ema_pitch)
         if target_yaw is None:
@@ -711,19 +817,6 @@ class TeleopModule(RobotModule):
         p = self._head_precision
         target_yaw = round(target_yaw / p) * p
         target_pitch = round(target_pitch / p) * p
-
-        # Cooldown: enforce minimum interval between gimbal moves to prevent
-        # feedback-loop oscillation (servo motion → camera view change →
-        # unconscious head reaction → new target → repeat).
-        if now - self._last_gimbal_move < self._head_cooldown:
-            log.debug("[Teleop] Cooldown active: %.2fs since last move (need %.2fs)",
-                      now - self._last_gimbal_move, self._head_cooldown)
-            return
-        self._last_gimbal_move = now
-        log.debug("[Teleop] Pipeline → gimbal target: (%.1f°, %.1f°) "
-                  "from ema=(%.1f,%.1f) dz=(%.1f,%.1f) precision=%.1f",
-                  target_yaw, target_pitch, self._ema_yaw, self._ema_pitch,
-                  self._head_dz_yaw, self._head_dz_pitch, p)
 
         # Update gimbal AND reset dead zone reference to current head angle
         self._head_dz_yaw = self._ema_yaw
@@ -775,8 +868,8 @@ class TeleopModule(RobotModule):
         gimbal = self._get_gimbal()
         if gimbal is not None:
             cfg = getattr(gimbal, 'config', {})
-            return tuple(cfg.get("pitch_limits", [-90, 60]))
-        return (-90, 60)
+            return tuple(cfg.get("pitch_limits", [-50, 60]))
+        return (-50, 60)
 
     # ── control loop ───────────────────────────────────────────────────────
 
@@ -816,24 +909,30 @@ class TeleopModule(RobotModule):
 
     def _read_controller(self) -> None:
         """Read XR controller state into cached fields."""
-        if self._vr_backend is None:
-            return
         try:
-            pose = self._vr_backend.get_controller_pose(self._arm_controller)
+            get_pose = xrt.get_left_controller_pose if self._arm_controller == "left" \
+                else xrt.get_right_controller_pose
+            get_trigger = xrt.get_left_trigger if self._arm_controller == "left" \
+                else xrt.get_right_trigger
+            get_grip = xrt.get_left_grip if self._arm_controller == "left" \
+                else xrt.get_right_grip
+
+            pose = get_pose()
             if pose is not None and len(pose) >= 7:
                 with self._lock:
                     self._ctrl_pos = [float(pose[0]), float(pose[1]), float(pose[2])]
+            # quaternion: pose[3..6]
 
-            trigger = self._vr_backend.get_trigger(self._arm_controller)
+            trigger = get_trigger()
             with self._lock:
                 self._trigger_val = float(trigger) if trigger is not None else 0.0
 
-            grip = self._vr_backend.get_grip(self._arm_controller)
+            grip = get_grip()
             with self._lock:
                 self._grip_pressed = bool(grip)
 
-            a_btn = self._vr_backend.get_button(self._arm_controller, "primaryButton")
-            b_btn = self._vr_backend.get_button(self._arm_controller, "secondaryButton")
+            a_btn = xrt.get_A_button()
+            b_btn = xrt.get_B_button()
             with self._lock:
                 self._button_a = bool(a_btn)
                 self._button_b = bool(b_btn)

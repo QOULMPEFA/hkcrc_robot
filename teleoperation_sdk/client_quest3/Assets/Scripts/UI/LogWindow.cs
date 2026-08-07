@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Collections.Concurrent;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -13,9 +14,23 @@ public class LogWindow : MonoBehaviour
 
     public RectTransform rectTransform;
 
+    // Info/Warn/Error are called from background threads (socket callbacks,
+    // send threads, decoders). MonoBehaviour APIs like StartCoroutine may
+    // only run on the main thread, so messages are queued here and drained
+    // in Update().
+    private static readonly ConcurrentQueue<string> _pendingMessages = new ConcurrentQueue<string>();
+
     private void Awake()
     {
         _instance = this;
+    }
+
+    private void Update()
+    {
+        while (_pendingMessages.TryDequeue(out var message))
+        {
+            AppendText(message);
+        }
     }
 
     private IEnumerator AutoScrollCoroutine()
@@ -57,14 +72,10 @@ public class LogWindow : MonoBehaviour
 
     private static void Message(string message)
     {
-        if (_instance != null)
-        {
-            _instance.AppendText(message);
-        }
-        else
-        {
-            _instance = FindObjectOfType<LogWindow>();
-        }
+        // Callers may be on background threads (socket callbacks, send
+        // threads, decoders), so never touch Unity APIs here — just queue
+        // the text and let Update() apply it on the main thread.
+        _pendingMessages.Enqueue(message);
     }
 
     public static void Info(string info)

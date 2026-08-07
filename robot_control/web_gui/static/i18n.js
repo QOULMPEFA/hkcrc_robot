@@ -255,6 +255,29 @@ I18n.en["teleop.gimbal_home"]         = "Gimbal Home";
 I18n.en["teleop.gimbal_unavailable"]  = "N/A";
 I18n.en["teleop.gimbal_limits"]     = "Limits";
 
+/* === teleop video bridge (RealSense -> Quest 3) === */
+I18n.zh["teleop.video_section"]  = "视频图传 (RealSense → Quest 3)";
+I18n.zh["teleop.video_status"]   = "图传:";
+I18n.zh["teleop.video_client"]   = "头显:";
+I18n.zh["teleop.video_ports"]    = "端口";
+I18n.zh["teleop.video_running"]  = "运行中";
+I18n.zh["teleop.video_stopped"]  = "未启动";
+I18n.zh["teleop.video_start"]    = "启动图传";
+I18n.zh["teleop.video_stop"]     = "停止图传";
+I18n.zh["teleop.video_restart"]  = "重启图传";
+I18n.zh["teleop.video_log"]      = "查看日志";
+
+I18n.en["teleop.video_section"]  = "Video Bridge (RealSense → Quest 3)";
+I18n.en["teleop.video_status"]   = "Bridge:";
+I18n.en["teleop.video_client"]   = "Headset:";
+I18n.en["teleop.video_ports"]    = "Ports";
+I18n.en["teleop.video_running"]  = "Running";
+I18n.en["teleop.video_stopped"]  = "Stopped";
+I18n.en["teleop.video_start"]    = "Start Bridge";
+I18n.en["teleop.video_stop"]     = "Stop Bridge";
+I18n.en["teleop.video_restart"]  = "Restart Bridge";
+I18n.en["teleop.video_log"]      = "View Log";
+
 /* === camera panel === */
 I18n.zh["camera.offline"]  = "摄像头未连接";
 I18n.zh["camera.loading"]  = "加载中...";
@@ -268,6 +291,14 @@ I18n.zh["camera.status_waiting"] = "等待画面...";
 I18n.zh["camera.select_device"] = "选择设备";
 I18n.zh["camera.scan"]      = "扫描摄像头";
 I18n.zh["camera.scanning"]  = "扫描中...";
+I18n.zh["camera.video_bridge"]      = "图传到头显";
+I18n.zh["camera.video_bridging"]    = "切换中...";
+I18n.zh["camera.video_bridge_hint"] = "把当前选中的摄像头推送到 Quest 头显（已在图传时直接换源，无需重连）";
+I18n.zh["camera.video_bridge_on"]   = "图传中:";
+I18n.zh["camera.mode_color"]  = "彩色";
+I18n.zh["camera.mode_stereo"] = "双目";
+I18n.zh["camera.mode_depth"]  = "深度";
+I18n.zh["camera.mode_label"]  = "模式";
 
 I18n.en["camera.offline"]  = "Camera Offline";
 I18n.en["camera.loading"]  = "Loading...";
@@ -281,13 +312,10 @@ I18n.en["camera.status_lost"] = "Signal Lost";
 I18n.en["camera.status_stale"] = "Stale";
 I18n.en["camera.status_waiting"] = "Waiting...";
 I18n.en["camera.select_device"] = "Select Device";
-
-/* === camera mode switching === */
-I18n.zh["camera.mode_color"]  = "彩色";
-I18n.zh["camera.mode_stereo"] = "双目";
-I18n.zh["camera.mode_depth"]  = "深度";
-I18n.zh["camera.mode_label"]  = "模式";
-
+I18n.en["camera.video_bridge"]      = "Stream to HMD";
+I18n.en["camera.video_bridging"]    = "Switching...";
+I18n.en["camera.video_bridge_hint"] = "Stream the selected camera to the Quest headset (switches source live — no reconnect needed)";
+I18n.en["camera.video_bridge_on"]   = "Streaming:";
 I18n.en["camera.mode_color"]  = "Color";
 I18n.en["camera.mode_stereo"] = "Stereo";
 I18n.en["camera.mode_depth"]  = "Depth";

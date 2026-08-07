@@ -56,7 +56,6 @@ namespace Robot.V2.Network
             LogWindow.Info($"Attempting to connect to server at {ip}:{port}");
             _callbackProxy.OnConnected = onConnected;
             GetJavaObject().Call("connectToServer", ip, port, _callbackProxy);
-            Status = ClientStatus.Connected;
         }
 
         /// <summary>

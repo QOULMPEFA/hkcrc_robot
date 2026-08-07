@@ -680,7 +680,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .cam-device-select:focus {
   outline: 1px solid var(--accent);
 }
-
 .cam-mode-row {
   display: flex;
   align-items: center;

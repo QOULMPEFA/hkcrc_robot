@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>WebRTC Camera</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #111; display: flex; flex-direction: column; align-items: center; font-family: monospace; color: #ccc; padding: 16px; }
+  video { width: 100%; max-width: 640px; max-height: 480px; background: #000; }
+  .status { margin: 8px 0; }
+  .ok { color: #4caf50; }
+  .err { color: #f44336; }
+  #debug { width: 100%; max-width: 640px; background: #222; padding: 8px; font-size: 11px; height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin-top: 8px; border: 1px solid #444; }
+</style>
+</head>
+<body>
+<video id="player" autoplay muted playsinline></video>
+<div id="status" class="status">Connecting...</div>
+<div id="debug">[debug log]</div>
+
+<script>
+const HOST = window.location.hostname || '192.168.1.101';
+const API = 'http://' + HOST + ':1985';
+const STREAM_URL = 'webrtc://' + HOST + '/live/cam';
+
+function log(m) { debug.textContent += '\n' + new Date().toISOString().slice(11,19) + ' ' + m; }
+
+async function start() {
+  try {
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    const status = document.getElementById('status');
+    const video = document.getElementById('player');
+
+    pc.ontrack = (evt) => { video.srcObject = evt.streams[0]; status.textContent = 'Playing'; status.className = 'status ok'; };
+    pc.oniceconnectionstatechange = () => {
+      log('ICE: ' + pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed') { status.textContent = 'ICE failed'; status.className = 'status err'; }
+    };
+    pc.onicecandidate = (e) => {
+      if (e.candidate) log('Local ICE: ' + e.candidate.candidate.substring(0, 80));
+      else log('ICE gathering done');
+    };
+
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    log('Offer created, waiting ICE...');
+
+    await new Promise(r => {
+      if (pc.iceGatheringState === 'complete') r();
+      else pc.addEventListener('icecandidate', e => { if (!e.candidate) r(); });
+    });
+
+    status.textContent = 'Sending play request...';
+    const body = JSON.stringify({
+      sdp: pc.localDescription.sdp,
+      streamurl: STREAM_URL,
+      api: API + '/rtc/v1/play/'
+    });
+    log('POST ' + API + '/rtc/v1/play/');
+
+    const resp = await fetch(API + '/rtc/v1/play/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body
+    });
+
+    log('HTTP ' + resp.status);
+    const data = await resp.json();
+    log('code=' + data.code + ' sdp_len=' + (data.sdp ? data.sdp.length : 0));
+
+    if (data.code !== 0) throw new Error('SRS error ' + data.code + ': ' + (data.desc || ''));
+
+    await pc.setRemoteDescription({ type: 'answer', sdp: data.sdp });
+    log('Remote description set');
+    status.textContent = 'Connected (waiting video...)';
+    status.className = 'status ok';
+
+  } catch (err) {
+    log('ERROR: ' + err.message);
+    document.getElementById('status').textContent = 'Error: ' + err.message;
+    document.getElementById('status').className = 'status err';
+  }
+}
+
+start();
+</script>
+</body>
+</html>

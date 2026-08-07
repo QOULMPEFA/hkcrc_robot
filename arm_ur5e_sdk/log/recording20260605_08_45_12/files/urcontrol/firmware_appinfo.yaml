@@ -1,0 +1,136 @@
+timestamp: 2025-04-23_06:33:09
+0:
+  1:
+    mainapp:
+      - {board: ESCB, CRC: 0x51D8B6EF, version: 2.22.13, apptype: 1, MCU: 0, board_value: 8, board_revision: 2, timestamp: 2025-03-04_14:43:27}
+    bootloader:
+      - {board: ESCB, CRC: 0x83A364F3, version: 2.3.0, apptype: 0, MCU: 0, board_value: 8, board_revision: 2, timestamp: 2025-03-04_14:43:27}
+  2:
+    mainapp:
+      - {board: ESCB, CRC: 0xCCECEBFD, version: 59.4.10, apptype: 1, MCU: 0, board_value: 8, board_revision: 1, timestamp: 2025-03-04_14:43:27}
+    bootloader:
+      - {board: ESCB, CRC: 0xC26E69DA, version: 6.2.4, apptype: 0, MCU: 0, board_value: 8, board_revision: 1, timestamp: 2025-03-04_14:43:27}
+  4:
+    mainapp:
+      - {board: ESCB, CRC: 0x4FD53A5C, version: 54.2.22, apptype: 1, MCU: 0, board_value: 8, board_revision: 1, timestamp: 2025-03-04_14:43:27}
+    bootloader:
+      - {board: ESCB, CRC: 0xB6F9E159, version: 5.6.1, apptype: 0, MCU: 0, board_value: 8, board_revision: 1, timestamp: 2025-03-04_14:43:27}
+1:
+  1:
+    mainapp:
+      - {board: ES3, CRC: 0x1A86C1E8, version: 3.10.12, apptype: 1, MCU: 0, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:44:35}
+    bootloader:
+      - {board: ES3, CRC: 0x74F44043, version: 2.3.0, apptype: 0, MCU: 0, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:44:35}
+  2:
+    mainapp:
+      - {board: ES3, CRC: 0x6FC0AFB0, version: 69.4.8, apptype: 1, MCU: 1, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+    bootloader:
+      - {board: ES3, CRC: 0x43F80A7F, version: 8.4.14, apptype: 0, MCU: 1, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+  4:
+    mainapp:
+      - {board: ES3, CRC: 0xA0B2AF85, version: 51.2.30, apptype: 1, MCU: 1, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+    bootloader:
+      - {board: ES3, CRC: 0xB5D98C81, version: 7.8.0, apptype: 0, MCU: 1, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+2:
+  1:
+    mainapp:
+      - {board: ES3, CRC: 0x1A86C1E8, version: 3.10.12, apptype: 1, MCU: 0, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:44:35}
+    bootloader:
+      - {board: ES3, CRC: 0x74F44043, version: 2.3.0, apptype: 0, MCU: 0, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:44:35}
+  2:
+    mainapp:
+      - {board: ES3, CRC: 0x6FC0AFB0, version: 69.4.8, apptype: 1, MCU: 1, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+    bootloader:
+      - {board: ES3, CRC: 0x43F80A7F, version: 8.4.14, apptype: 0, MCU: 1, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+  4:
+    mainapp:
+      - {board: ES3, CRC: 0xA0B2AF85, version: 51.2.30, apptype: 1, MCU: 1, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+    bootloader:
+      - {board: ES3, CRC: 0xB5D98C81, version: 7.8.0, apptype: 0, MCU: 1, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+3:
+  1:
+    mainapp:
+      - {board: ES3, CRC: 0x1A86C1E8, version: 3.10.12, apptype: 1, MCU: 0, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:44:35}
+    bootloader:
+      - {board: ES3, CRC: 0x74F44043, version: 2.3.0, apptype: 0, MCU: 0, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:44:35}
+  2:
+    mainapp:
+      - {board: ES3, CRC: 0x6FC0AFB0, version: 69.4.8, apptype: 1, MCU: 1, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+    bootloader:
+      - {board: ES3, CRC: 0x43F80A7F, version: 8.4.14, apptype: 0, MCU: 1, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+  4:
+    mainapp:
+      - {board: ES3, CRC: 0xA0B2AF85, version: 51.2.30, apptype: 1, MCU: 1, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+    bootloader:
+      - {board: ES3, CRC: 0xB5D98C81, version: 7.8.0, apptype: 0, MCU: 1, board_value: 3, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+4:
+  1:
+    mainapp:
+      - {board: ES1, CRC: 0x1A86C1E8, version: 3.10.12, apptype: 1, MCU: 0, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:44:35}
+    bootloader:
+      - {board: ES1, CRC: 0x74F44043, version: 2.3.0, apptype: 0, MCU: 0, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:44:35}
+  2:
+    mainapp:
+      - {board: ES1, CRC: 0x6FC0AFB0, version: 69.4.8, apptype: 1, MCU: 1, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+    bootloader:
+      - {board: ES1, CRC: 0x43F80A7F, version: 8.4.14, apptype: 0, MCU: 1, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+  4:
+    mainapp:
+      - {board: ES1, CRC: 0xA0B2AF85, version: 51.2.30, apptype: 1, MCU: 1, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+    bootloader:
+      - {board: ES1, CRC: 0xB5D98C81, version: 7.8.0, apptype: 0, MCU: 1, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+5:
+  1:
+    mainapp:
+      - {board: ES1, CRC: 0x1A86C1E8, version: 3.10.12, apptype: 1, MCU: 0, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:44:35}
+    bootloader:
+      - {board: ES1, CRC: 0x74F44043, version: 2.3.0, apptype: 0, MCU: 0, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:44:35}
+  2:
+    mainapp:
+      - {board: ES1, CRC: 0x6FC0AFB0, version: 69.4.8, apptype: 1, MCU: 1, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+    bootloader:
+      - {board: ES1, CRC: 0x43F80A7F, version: 8.4.14, apptype: 0, MCU: 1, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+  4:
+    mainapp:
+      - {board: ES1, CRC: 0xA0B2AF85, version: 51.2.30, apptype: 1, MCU: 1, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+    bootloader:
+      - {board: ES1, CRC: 0xB5D98C81, version: 7.8.0, apptype: 0, MCU: 1, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+6:
+  1:
+    mainapp:
+      - {board: ES1, CRC: 0x1A86C1E8, version: 3.10.12, apptype: 1, MCU: 0, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:44:35}
+    bootloader:
+      - {board: ES1, CRC: 0x74F44043, version: 2.3.0, apptype: 0, MCU: 0, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:44:35}
+  2:
+    mainapp:
+      - {board: ES1, CRC: 0x6FC0AFB0, version: 69.4.8, apptype: 1, MCU: 1, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+    bootloader:
+      - {board: ES1, CRC: 0x43F80A7F, version: 8.4.14, apptype: 0, MCU: 1, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+  4:
+    mainapp:
+      - {board: ES1, CRC: 0xA0B2AF85, version: 51.2.30, apptype: 1, MCU: 1, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+    bootloader:
+      - {board: ES1, CRC: 0xB5D98C81, version: 7.8.0, apptype: 0, MCU: 1, board_value: 1, board_revision: 0, timestamp: 2025-03-04_14:45:03}
+7:
+  1:
+    mainapp:
+      - {board: Tool, CRC: 0xCAA80EAA, version: 5.23.38, apptype: 1, MCU: 0, board_value: 10, board_revision: 2, timestamp: 2025-03-04_14:45:03}
+      - {board: Tool, CRC: 0x8A685CC3, version: 4.3.3, apptype: 1, MCU: 0, board_value: 10, board_revision: 2, timestamp: 2025-03-04_14:44:36}
+    bootloader:
+      - {board: Tool, CRC: 0xB393F6ED, version: 2.2.1, apptype: 0, MCU: 0, board_value: 10, board_revision: 2, timestamp: 2025-03-04_14:44:36}
+13:
+  2:
+    mainapp:
+      - {board: TP, CRC: 0x4F09E3FE, version: 10.33.19, apptype: 1, MCU: 0, board_value: 9, board_revision: 0, timestamp: 2025-03-04_14:43:27}
+    bootloader:
+      - {board: TP, CRC: 0xC26E69DA, version: 6.2.4, apptype: 0, MCU: 0, board_value: 9, board_revision: 0, timestamp: 2025-04-23_06:33:09}
+      - {board: TP, CRC: 0x1A32A183, version: 5.7.4, apptype: 0, MCU: 0, board_value: 9, board_revision: 0, timestamp: 2025-03-04_15:18:20}
+      - {board: TP, CRC: 0xC26E69DA, version: 6.2.4, apptype: 0, MCU: 0, board_value: 9, board_revision: 0, timestamp: 2025-03-04_14:43:27}
+  4:
+    mainapp:
+      - {board: TP, CRC: 0x44C5C3E8, version: 6.40.21, apptype: 1, MCU: 0, board_value: 9, board_revision: 0, timestamp: 2025-03-04_14:43:27}
+    bootloader:
+      - {board: TP, CRC: 0xB1E3E7CD, version: 5.11.0, apptype: 0, MCU: 0, board_value: 9, board_revision: 0, timestamp: 2025-04-23_06:33:09}
+      - {board: TP, CRC: 0x20E92F5D, version: 5.4.3, apptype: 0, MCU: 0, board_value: 9, board_revision: 0, timestamp: 2025-03-04_15:18:20}
+      - {board: TP, CRC: 0xB1E3E7CD, version: 5.11.0, apptype: 0, MCU: 0, board_value: 9, board_revision: 0, timestamp: 2025-03-04_14:43:27}
+yml_version: 1

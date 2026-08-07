@@ -1,0 +1,434 @@
+
+
+
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <meta http-equiv="x-ua-compatible" content="ie=edge">
+      
+      
+      
+      
+        <meta name="lang:clipboard.copy" content="复制">
+      
+        <meta name="lang:clipboard.copied" content="已复制">
+      
+        <meta name="lang:search.language" content="en, zh">
+      
+        <meta name="lang:search.pipeline.stopwords" content="True">
+      
+        <meta name="lang:search.pipeline.trimmer" content="True">
+      
+        <meta name="lang:search.result.none" content="没有找到符合条件的结果">
+      
+        <meta name="lang:search.result.one" content="找到 1 个符合条件的结果">
+      
+        <meta name="lang:search.result.other" content="# 个符合条件的结果">
+      
+        <meta name="lang:search.tokenizer" content="[\uff0c\u3002]+">
+      
+      <link rel="shortcut icon" href="../../../../../logo.png">
+      <meta name="generator" content="mkdocs-1.0.4, mkdocs-material-4.5.1">
+    
+    
+      
+        <title>2DOF Open MV云台（STM32）</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../../../assets/stylesheets/application.82a18eb7.css">
+      
+        <link rel="stylesheet" href="../../../../../../assets/stylesheets/application-palette.3e3d1dff.css">
+      
+      
+        
+        
+        <meta name="theme-color" content="#8641a9">
+      
+    
+    
+      <script src="../../../../../../assets/javascripts/modernizr.74668098.js"></script>
+    
+    
+      
+        <link href="https://fonts.gstatic.com" rel="preconnect" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,400,400i,700|Roboto+Mono&display=fallback">
+        <style>body,input{font-family:"Roboto","Helvetica Neue",Helvetica,Arial,sans-serif}code,kbd,pre{font-family:"Roboto Mono","Courier New",Courier,monospace}</style>
+      
+    
+    <link rel="stylesheet" href="../../../../../../assets/fonts/material-icons.css">
+    
+    
+    
+      
+    
+    
+  </head>
+  
+    
+    
+    <body dir="ltr" data-md-color-primary="purple" data-md-color-accent="purple">
+  
+    <svg class="md-svg">
+      <defs>
+        
+        
+      </defs>
+    </svg>
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" data-md-component="overlay" for="__drawer"></label>
+    
+      <a href="#_1" tabindex="1" class="md-skip">
+        跳转至
+      </a>
+    
+    
+      <header class="md-header" data-md-component="header">
+  <nav class="md-header-nav md-grid">
+    <div class="md-flex">
+      <div class="md-flex__cell md-flex__cell--shrink">
+        <a href="../../../../../.." title="2DOF Open MV云台（STM32）" class="md-header-nav__button md-logo">
+          
+            <img src="../../../../../logo.png" width="24" height="24">
+          
+        </a>
+      </div>
+      <div class="md-flex__cell md-flex__cell--shrink">
+        <label class="md-icon md-icon--menu md-header-nav__button" for="__drawer"></label>
+      </div>
+      <div class="md-flex__cell md-flex__cell--stretch">
+        <div class="md-flex__ellipsis md-header-nav__title" data-md-component="title">
+          
+            <span class="md-header-nav__topic">
+              2DOF Open MV云台（STM32）
+            </span>
+            <span class="md-header-nav__topic">
+              
+                串口舵机驱动库
+              
+            </span>
+          
+        </div>
+      </div>
+      <div class="md-flex__cell md-flex__cell--shrink">
+        
+          <label class="md-icon md-icon--search md-header-nav__button" for="__search"></label>
+          
+<div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="query" data-md-state="active">
+      <label class="md-icon md-search__icon" for="__search"></label>
+      <button type="reset" class="md-icon md-search__icon" data-md-component="reset" tabindex="-1">
+        &#xE5CD;
+      </button>
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="result">
+          <div class="md-search-result__meta">
+            键入以开始搜索
+          </div>
+          <ol class="md-search-result__list"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+        
+      </div>
+      
+    </div>
+  </nav>
+</header>
+    
+    <div class="md-container">
+      
+        
+      
+      
+      <main class="md-main" role="main">
+        <div class="md-main__inner md-grid" data-md-component="container">
+          
+            
+              <div class="md-sidebar md-sidebar--primary" data-md-component="navigation">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    <nav class="md-nav md-nav--primary" data-md-level="0">
+  <a href="https://wiki.fashionrobo.com">
+    <img src="../../../../../../assets/images/logo2.png" style="width:60%;"/>
+  </a>
+  
+  <label class="md-nav__title md-nav__title--site" for="__drawer">
+    <a href="../../../../../.." title="2DOF Open MV云台（STM32）" class="md-nav__button md-logo">
+      
+        <img src="../../../../../logo.png" width="48" height="48">
+      
+    </a>
+    2DOF Open MV云台（STM32）
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+      
+
+
+  <li class="md-nav__item">
+    <a href="../../../../../.." title="目录" class="md-nav__link">
+      目录
+    </a>
+  </li>
+
+    
+      
+      
+      
+
+
+  <li class="md-nav__item">
+    <a href="../../../../../../list/" title="物料清单" class="md-nav__link">
+      物料清单
+    </a>
+  </li>
+
+    
+      
+      
+      
+
+
+  <li class="md-nav__item">
+    <a href="../../../../../../environmental-configuration/" title="开发环境配置" class="md-nav__link">
+      开发环境配置
+    </a>
+  </li>
+
+    
+      
+      
+      
+
+
+  <li class="md-nav__item">
+    <a href="../../../../../../engineering-structure/" title="工程结构" class="md-nav__link">
+      工程结构
+    </a>
+  </li>
+
+    
+      
+      
+      
+
+
+  <li class="md-nav__item">
+    <a href="../../../../../../wiring-instruction/" title="接线说明" class="md-nav__link">
+      接线说明
+    </a>
+  </li>
+
+    
+      
+      
+      
+
+
+  <li class="md-nav__item">
+    <a href="../../../../../../assembly-tutorial/" title="舵机云台组装教程" class="md-nav__link">
+      舵机云台组装教程
+    </a>
+  </li>
+
+    
+      
+      
+      
+
+
+  <li class="md-nav__item">
+    <a href="../../../../../../servo-communication/" title="舵机通讯检测" class="md-nav__link">
+      舵机通讯检测
+    </a>
+  </li>
+
+    
+      
+      
+      
+
+
+  <li class="md-nav__item">
+    <a href="../../../../../../servo-angle-control/" title="舵机角度控制" class="md-nav__link">
+      舵机角度控制
+    </a>
+  </li>
+
+    
+      
+      
+      
+
+
+  <li class="md-nav__item">
+    <a href="../../../../../../servo-damping-mode/" title="舵机阻尼模式" class="md-nav__link">
+      舵机阻尼模式
+    </a>
+  </li>
+
+    
+      
+      
+      
+
+
+  <li class="md-nav__item">
+    <a href="../../../../../../servo-wheeled-mode/" title="舵机轮式模式" class="md-nav__link">
+      舵机轮式模式
+    </a>
+  </li>
+
+    
+      
+      
+      
+
+
+  <li class="md-nav__item">
+    <a href="../../../../../../user-defined/" title="舵机用户自定义数据" class="md-nav__link">
+      舵机用户自定义数据
+    </a>
+  </li>
+
+    
+      
+      
+      
+
+
+  <li class="md-nav__item">
+    <a href="https://wiki.fashionrobo.com" title="返回总目录" class="md-nav__link">
+      返回总目录
+    </a>
+  </li>
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="toc">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+<nav class="md-nav md-nav--secondary">
+  
+  
+    
+  
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          <div class="md-content">
+            <article class="md-content__inner md-typeset">
+              
+              <!--<img src="../../../../../../assets/images/logo2.png" style="width:25%;"/>-->
+              <!--<p>深圳市华馨京科技有限公司出品</p>-->
+              
+                
+                
+                <h1 id="_1">串口舵机驱动库<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h1>
+<p>封装了Fashion Star 串口舵机的通信协议, 是串口舵机STM32F103版本的SDK</p>
+                
+                  
+                
+              
+              
+                
+
+
+              
+              <hr>
+              <p>Fashion Star Robot　关注华馨京微信公众号</p>
+              <img src="../../../../../../assets/images/wechat.jpg"/>
+
+            </article>
+          </div>
+        </div>
+      </main>
+      
+        
+<footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-footer-copyright">
+        
+        powered by
+        <a href="https://www.mkdocs.org">MkDocs</a>
+        and
+        <a href="https://squidfunk.github.io/mkdocs-material/">
+          Material for MkDocs</a>
+      </div>
+      
+  <div class="md-footer-social">
+    <link rel="stylesheet" href="../../../../../../assets/fonts/font-awesome.css">
+    
+      <a href="https://github.com/servodevelop/" class="md-footer-social__link fa fa-github"></a>
+    
+      <a href="https://twitter.com/FashionStarAsia" class="md-footer-social__link fa fa-twitter"></a>
+    
+      <a href="https://www.facebook.com/FashionStarAsia" class="md-footer-social__link fa fa-facebook"></a>
+    
+      <a href="https://space.bilibili.com/95389781" class="md-footer-social__link fa fa-bilibili"></a>
+    
+  </div>
+
+    </div>
+  </div>
+</footer>
+      
+    
+    </div>
+
+    
+      <script src="../../../../../../assets/javascripts/application.d151b584.js"></script>
+      
+        
+        
+          
+          <script src="../../../../../../assets/javascripts/lunr/lunr.stemmer.support.js"></script>
+          
+            
+          
+            
+              
+              
+            
+          
+          
+            <script src="../../../../../../assets/javascripts/lunr/lunr.multi.js"></script>
+          
+        
+      
+      <script>app.initialize({version:"1.0.4",url:{base:"../../../../../.."}})</script>
+      
+        <script src="//cdn.bootcss.com/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+      
+    
+  </body>
+</html>

@@ -825,6 +825,12 @@ function _cleanupPanel(panelId, module) {
 
 // ── Camera Panel ──────────────────────────────────────────────────────────────
 
+// The bridge is driven by the teleop module. Without it loaded, the SocketIO
+// event is silently dropped, so hide the button rather than offer a dead one.
+function _canBridgeVideo() {
+  return ACTIVE_MODULES.includes("teleop") && ROLE !== "viewer";
+}
+
 function _renderCameraPanel(panelId, body) {
   const panel = document.getElementById(panelId);
   body.innerHTML = `
@@ -850,6 +856,7 @@ function _renderCameraPanel(panelId, body) {
     <div class="btn-row center" style="margin-top:6px; gap:8px">
       <button class="btn-secondary" id="${panelId}-cam-reset">${I18n.t("camera.reset")}</button>
       <button class="btn-secondary" id="${panelId}-cam-scan">${I18n.t("camera.scan")}</button>
+      ${_canBridgeVideo() ? `<button class="btn-primary" id="${panelId}-cam-bridge" title="${I18n.t("camera.video_bridge_hint")}">${I18n.t("camera.video_bridge")}</button>` : ""}
     </div>
   `;
 
@@ -863,11 +870,17 @@ function _renderCameraPanel(panelId, body) {
     deviceSel.value = panel.dataset.camDevice;
   }
 
-  // Device selection → update img src and mode row visibility
+  // Device selection → update img src
   if (deviceSel) {
     deviceSel.addEventListener("change", () => {
       const dev = deviceSel.value;
-      if (panel) panel.dataset.camDevice = dev;
+      if (panel) {
+        panel.dataset.camDevice = dev;
+        // Source ids are assigned by enumeration order and shift when a camera
+        // is replugged; the serial is what actually identifies the hardware.
+        const opt = deviceSel.selectedOptions[0];
+        panel.dataset.camSerial = (opt && opt.dataset.serial) || "";
+      }
       _updateCameraModeRow(panelId, dev);
       if (dev) {
         // Clear first to force browser to close old MJPEG connection
@@ -889,7 +902,7 @@ function _renderCameraPanel(panelId, body) {
     img.addEventListener("load", () => { img.style.display = "block"; if (err) err.style.display = "none"; });
   }
 
-  // Mode button click handlers
+  // Mode button click handlers (Orbbec colour/depth/stereo)
   if (modeRow) {
     modeRow.querySelectorAll(".cam-mode-btn").forEach(btn => {
       btn.addEventListener("click", () => {
@@ -931,6 +944,25 @@ function _renderCameraPanel(panelId, body) {
     });
   }
 
+  // Bridge the selected camera to the Quest headset. Sends the serial when we
+  // have one so the backend pins the physical camera, not the volatile id.
+  const btnBridge = el(panelId + "-cam-bridge");
+  if (btnBridge) {
+    btnBridge.addEventListener("click", () => {
+      const dev = deviceSel ? deviceSel.value : "";
+      if (!dev) return;
+      const opt = deviceSel.selectedOptions[0];
+      const serial = (opt && opt.dataset.serial) || "";
+      btnBridge.disabled = true;
+      btnBridge.textContent = I18n.t("camera.video_bridging");
+      socket.emit("teleop_video_start", { source: serial || dev });
+      setTimeout(() => {
+        btnBridge.disabled = false;
+        btnBridge.textContent = I18n.t("camera.video_bridge");
+      }, 3000);
+    });
+  }
+
   // Populate from embedded page data first (works for all roles, no SocketIO)
   if (window.CAMERA_DEVICES && window.CAMERA_DEVICES.length > 0) {
     _populateCameraDropdowns(window.CAMERA_DEVICES);
@@ -945,9 +977,8 @@ function _updateCameraModeRow(panelId, deviceId) {
   if (!modeRow) return;
 
   // Find device info from cached device list
-  const allPanels = PanelManager._panels;
   let cameraMode = null;
-  if (allPanels && window._cameraDevices) {
+  if (window._cameraDevices) {
     const devInfo = window._cameraDevices.find(d => d.id === deviceId);
     if (devInfo && devInfo.camera_mode) {
       cameraMode = devInfo.camera_mode;
@@ -968,7 +999,6 @@ function _updateCameraModeRow(panelId, deviceId) {
 // Handle mode switch result
 socket.on("camera_mode_result", (data) => {
   if (data && data.ok) {
-    // Update mode buttons across all panels viewing this device
     PanelManager._panels.forEach((p, panelId) => {
       if (p.module !== "camera") return;
       const panel = document.getElementById(panelId);
@@ -1788,22 +1818,29 @@ socket.on("camera_reset_result", (data) => {
 });
 
 function _populateCameraDropdowns(devices) {
-  window._cameraDevices = devices;
   PanelManager._panels.forEach((p, panelId) => {
     if (p.module !== "camera") return;
     const sel = el(panelId + "-cam-device");
     if (!sel) return;
-    const currentVal = sel.value;
+    const panel = document.getElementById(panelId);
+    const wantSerial = (panel && panel.dataset.camSerial) || "";
+    const currentVal = sel.value || (panel && panel.dataset.camDevice) || "";
     sel.innerHTML = '<option value="">-- ' + I18n.t("camera.select_device") + ' --</option>';
     devices.forEach((d) => {
       const opt = document.createElement("option");
       opt.value = d.id;
+      opt.dataset.serial = d.serial || "";
       let label = d.device_name || d.id;
       if (d.active) label += " ✓";
       opt.textContent = label;
       sel.appendChild(opt);
     });
-    if (currentVal && devices.some(d => d.id === currentVal)) {
+    // Prefer the remembered serial: ids shift when a camera is replugged.
+    const bySerial = wantSerial && devices.find(d => d.serial === wantSerial);
+    if (bySerial) {
+      sel.value = bySerial.id;
+      sel.dispatchEvent(new Event("change"));
+    } else if (currentVal && devices.some(d => d.id === currentVal)) {
       sel.value = currentVal;
     } else {
       const firstActive = devices.find(d => d.active);
@@ -2003,6 +2040,25 @@ function _renderTeleopPanel(panelId, body) {
       <button class="btn-secondary ctrl" id="${panelId}-tl-gimbal-calibrate">${t("teleop.gimbal_calibrate")}</button>
       <button class="btn-secondary ctrl" id="${panelId}-tl-gimbal-home">${t("teleop.gimbal_home")}</button>
     </div>
+    <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px">
+      <b>${t("teleop.video_section")}</b>
+    </div>
+    <div class="status-row" style="font-size:13px;margin-bottom:6px">
+      <span>${t("teleop.video_status")}<b id="${panelId}-tl-video-status">—</b></span>
+      <span>${t("teleop.video_client")}<b id="${panelId}-tl-video-client">—</b></span>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px">
+      ${t("teleop.video_ports")}: TCP <span id="${panelId}-tl-video-ctrl-port">13579</span>
+      / UDP <span id="${panelId}-tl-video-udp-port">10004</span>
+      <span id="${panelId}-tl-video-pid"></span>
+    </div>
+    <div class="btn-row" style="gap:4px">
+      <button class="btn-primary ctrl" id="${panelId}-tl-video-start">${t("teleop.video_start")}</button>
+      <button class="btn-warn ctrl"    id="${panelId}-tl-video-stop">${t("teleop.video_stop")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-tl-video-restart">${t("teleop.video_restart")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-tl-video-log">${t("teleop.video_log")}</button>
+    </div>
+    <pre id="${panelId}-tl-video-logbox" style="display:none;font-size:10px;max-height:140px;overflow:auto;background:var(--bg);border:1px solid var(--border);padding:6px;margin-top:6px;white-space:pre-wrap"></pre>
   `;
 
   const JOINT_NAMES = ["J1", "J2", "J3", "J4", "J5", "J6"];
@@ -2027,6 +2083,20 @@ function _renderTeleopPanel(panelId, body) {
   el(panelId + "-tl-gimbal-disable")?.addEventListener("click",  () => socket.emit("teleop_gimbal_track_disable"));
   el(panelId + "-tl-gimbal-calibrate")?.addEventListener("click", () => socket.emit("teleop_gimbal_calibrate"));
   el(panelId + "-tl-gimbal-home")?.addEventListener("click",     () => socket.emit("teleop_gimbal_home"));
+
+  el(panelId + "-tl-video-start")?.addEventListener("click",   () => socket.emit("teleop_video_start"));
+  el(panelId + "-tl-video-stop")?.addEventListener("click",    () => socket.emit("teleop_video_stop"));
+  el(panelId + "-tl-video-restart")?.addEventListener("click", () => socket.emit("teleop_video_restart"));
+  el(panelId + "-tl-video-log")?.addEventListener("click", () => {
+    const box = el(panelId + "-tl-video-logbox");
+    if (!box) return;
+    if (box.style.display === "none") {
+      box.style.display = "block";
+      socket.emit("teleop_video_log");
+    } else {
+      box.style.display = "none";
+    }
+  });
 }
 
 function _updateTeleopState(panelId, s) {
@@ -2080,7 +2150,51 @@ function _updateTeleopState(panelId, s) {
     const b = el(panelId + suffix);
     if (b) b.disabled = !s.gimbal_available;
   });
+
+  // ── Video bridge section ──
+  const vStat = el(panelId + "-tl-video-status");
+  if (vStat) {
+    vStat.textContent = s.video_running
+      ? I18n.t("teleop.video_running")
+      : I18n.t("teleop.video_stopped");
+    vStat.style.color = s.video_running ? "var(--ok, #2ecc71)" : "var(--muted)";
+    vStat.title = s.video_error || "";
+  }
+  _maybeSet(el(panelId + "-tl-video-client"), s.video_client || "—");
+  _maybeSet(el(panelId + "-tl-video-pid"), s.video_pid ? ` | PID ${s.video_pid}` : "");
+  if (s.video_control_port) _maybeSet(el(panelId + "-tl-video-ctrl-port"), s.video_control_port);
+  if (s.video_udp_port) _maybeSet(el(panelId + "-tl-video-udp-port"), s.video_udp_port);
+
+  const vStart = el(panelId + "-tl-video-start");
+  const vStop = el(panelId + "-tl-video-stop");
+  if (vStart) vStart.disabled = !!s.video_running;
+  if (vStop) vStop.disabled = !s.video_running;
 }
+
+socket.on("teleop_video_log", (data) => {
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "teleop") return;
+    const box = el(panelId + "-tl-video-logbox");
+    if (box) box.textContent = (data && data.text) || "(空)";
+  });
+});
+
+socket.on("teleop_video_result", (data) => {
+  if (!data) return;
+  if (data.source) {
+    PanelManager._panels.forEach((p, panelId) => {
+      if (p.module !== "camera") return;
+      const line = el(panelId + "-cam-status");
+      if (line) line.textContent = I18n.t("camera.video_bridge_on") + " " + data.source;
+    });
+  }
+  if (data.ok === false) return;
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "teleop") return;
+    const box = el(panelId + "-tl-video-logbox");
+    if (box && box.style.display !== "none") socket.emit("teleop_video_log");
+  });
+});
 
 function _renderGimbalPanel(panelId, body) {
   body.innerHTML = `

@@ -511,7 +511,7 @@ def main():
         "arm":    {"host": "192.168.56.101", "payload_mass": 0.5, "payload_cog": [0.0, 0.0, 0.05]},
         "ugv":    {"host": "127.0.0.1", "port": 9100},
         "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
-        "camera": {"auto_detect": True},
+        "camera": {"auto_detect": True, "width": 1280, "height": 720},
         "motor":  {},
         # port omitted = auto-detect RS485
         "hand":   {"protocol": "modbus", "baudrate": 460800, "slave_id": 0x7F},
@@ -526,6 +526,14 @@ def main():
             "head_rate_limit": 300.0,
             "head_deadzone": 3.0,
             "head_precision": 0.5,
+            "video_bridge": {
+                "script": "/home/yu/robot_code/camera_sdk/start_realsense_quest.sh",
+                "log": "/tmp/realsense_bridge.log",
+                "control_port": 13579,
+                "udp_port": 10004,
+                "autostart": False,
+                "default_camera": "D455",
+            },
         },
         "gimbal": {},
     }
