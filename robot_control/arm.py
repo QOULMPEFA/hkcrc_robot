@@ -47,7 +47,8 @@ class ArmState:
 
 
 class ArmController(RobotModule):
-    HOME_ANGLES_DEG = [0.0, -90.0, 0.0, -90.0, 0.0, 0.0]
+    HOME_ANGLES_DEG = [0.0, -180.0, 135.0, -90.0, 0.0, 0.0]
+    MAX_SPEED_PCT = 20.0
     LOG_CAPACITY = 80
     RECONNECT_INTERVAL = 3.0
     POLL_INTERVAL = 1.0
@@ -68,7 +69,9 @@ class ArmController(RobotModule):
         self._state_thread: Optional[threading.Thread] = None
         self._logs: list[ArmLogEntry] = []
         # Home position — set_home() overwrites this from current joint_actual_deg
-        self._home_angles: List[float] = list(self.HOME_ANGLES_DEG)
+        self._home_angles: List[float] = [
+            float(a) for a in cfg.get("home_angles_deg", self.HOME_ANGLES_DEG)
+        ]
         self._collision_enabled = True
         self._joints_initialized = False
         self._payload_mass = float(cfg.get("payload_mass", 0.5))
@@ -92,7 +95,7 @@ class ArmController(RobotModule):
             "joint_temps_c": [0.0] * 6,
             "joint_voltages_v": [0.0] * 6,
             "end_effector_xyz": [0.0, 0.0, 0.0],
-            "home_angles_deg": list(self.HOME_ANGLES_DEG),
+            "home_angles_deg": list(self._home_angles),
             "is_moving": False, "is_fault": False, "is_enabled": False,
             "connected": False,
             "robot_mode": "UNKNOWN", "safety_mode": "UNKNOWN", "fault_text": "",
@@ -166,7 +169,22 @@ class ArmController(RobotModule):
         self._add_log("info", f"断开动力 — {r}")
 
     def move_joints(self, angles_deg: List[float], speed_pct: float = 20.0) -> bool:
-        if getattr(self, '_teleop_active', False):
+        speed_pct = min(float(speed_pct), self.MAX_SPEED_PCT)
+        return self._move_joints(angles_deg, speed_pct=speed_pct, teleop=False)
+
+    def teleop_move_joints(self, angles_deg: List[float], speed_pct: float = 20.0) -> bool:
+        """Execute a joint move requested by the XR teleop trigger.
+
+        This is the same UR ``movej`` path used by the manual arm panel, but
+        it is allowed while teleop is active because the trigger is the
+        teleop equivalent of the manual execute button.
+        """
+        speed_pct = min(float(speed_pct), self.MAX_SPEED_PCT)
+        return self._move_joints(angles_deg, speed_pct=speed_pct, teleop=True)
+
+    def _move_joints(self, angles_deg: List[float], speed_pct: float,
+                     teleop: bool) -> bool:
+        if not teleop and getattr(self, '_teleop_active', False):
             log.warning("[Arm] Teleop active — rejecting move_joints")
             return False
         rads = [math.radians(a) for a in angles_deg]
@@ -180,14 +198,16 @@ class ArmController(RobotModule):
             with self._lock:
                 self._state.joint_angles_deg = list(angles_deg)
                 self._state.is_moving = True
-            log.info("[Arm] move_joints(deg=%s, speed=%.0f%%)",
+            log.info("[Arm] %smove_joints(deg=%s, speed=%.0f%%)",
+                     "teleop " if teleop else "",
                      [f"{a:.1f}" for a in angles_deg], speed_pct)
-            self._add_log("info", f"关节移动 speed={speed_pct:.0f}%")
+            self._add_log("info", f"{'遥操作' if teleop else ''}关节移动 speed={speed_pct:.0f}%")
         return ok
 
     def move_cartesian(self, x: float, y: float, z: float,
                        roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0,
                        speed_pct: float = 20.0) -> bool:
+        speed_pct = min(float(speed_pct), self.MAX_SPEED_PCT)
         if getattr(self, '_teleop_active', False):
             log.warning("[Arm] Teleop active — rejecting move_cartesian")
             return False
@@ -219,7 +239,7 @@ class ArmController(RobotModule):
         return True
 
     def go_home(self) -> bool:
-        return self.move_joints(list(self._home_angles), speed_pct=30.0)
+        return self.teleop_move_joints(list(self._home_angles), speed_pct=20.0)
 
     def stop_motion(self) -> None:
         self._dashboard_cmd("stop")
@@ -228,6 +248,16 @@ class ArmController(RobotModule):
             self._state.is_moving = False
         log.info("[Arm] stop()")
         self._add_log("warn", "急停")
+
+    def send_urscript(self, script: str) -> bool:
+        """Send a raw URScript command over the arm's primary (30001) socket.
+
+        Used by the teleop module as a raw URScript fallback through this
+        module's single connection instead of opening a competing socket on
+        port 30001 (UR allows only one primary client). Manual move_* commands
+        are already gated off while teleop is active via ``_teleop_active``.
+        """
+        return self._send_urscript(script)
 
     def emergency_stop(self) -> None:
         self.stop_motion()
@@ -496,6 +526,7 @@ class ArmController(RobotModule):
     # ── internals ──────────────────────────────────────────────────────────
 
     def _speed_to_params(self, speed_pct: float):
+        speed_pct = min(float(speed_pct), self.MAX_SPEED_PCT)
         factor = max(0.01, min(1.0, speed_pct / 100.0))
         return (factor * 2.5, factor * 2.0, factor * 1.5, factor * 0.5)
 

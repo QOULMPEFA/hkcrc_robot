@@ -90,6 +90,20 @@ def ur5_fk(joints_rad: List[float]) -> List[List[float]]:
     return t
 
 
+def ur5_fk_frames(joints_rad: List[float]) -> List[List[List[float]]]:
+    """Forward kinematics for each joint frame, starting with the base."""
+    frames = [[[1.0, 0.0, 0.0, 0.0],
+               [0.0, 1.0, 0.0, 0.0],
+               [0.0, 0.0, 1.0, 0.0],
+               [0.0, 0.0, 0.0, 1.0]]]
+    t = frames[0]
+    for i, theta in enumerate(joints_rad):
+        a, alpha, d = DH[i]
+        t = _mat_mul(t, _dh_transform(a, alpha, d, theta))
+        frames.append(t)
+    return frames
+
+
 # ── Jacobian computation ─────────────────────────────────────────────────────
 
 def _compute_jacobian(joints_rad: List[float]) -> List[List[float]]:
@@ -222,7 +236,8 @@ def ur5_ik(
     Returns:
         Joint angles in radians, or None if did not converge.
     """
-    q = list(seed_joints_rad) if seed_joints_rad else [0.0, -math.pi / 2, 0.0, -math.pi / 2, 0.0, 0.0]
+    q = list(seed_joints_rad) if seed_joints_rad else \
+        [0.0, -math.pi, 3.0 * math.pi / 4.0, -math.pi / 2.0, 0.0, 0.0]
 
     prev_err_mag = float("inf")
 

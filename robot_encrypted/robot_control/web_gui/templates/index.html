@@ -3,14 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title data-i18n="header.page_title">具身智能机器人控制面板 | Embodied Intelligence Robot</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <title data-i18n="header.page_title">机器人控制面板 | Robot Control Panel</title>
+  <link rel="stylesheet" href="/static/style.css?v=6" />
 </head>
 <body data-role="{{ role }}">
   <header>
-    <h1 data-i18n="header.panel_title">具身智能机器人控制面板</h1>
-    <span class="robot-type-badge" data-i18n="header.robot_type_tag">🦾 具身智能机器人</span>
-    <span class="hardware-summary" data-i18n="header.hardware_summary">UR5e 机械臂 + UGV 底盘 + 灵巧手 + 升降平台</span>
+    <h1 data-i18n="header.panel_title">机器人控制面板</h1>
+    <span class="robot-type-badge" data-i18n="header.robot_type_tag">机器人</span>
     <div id="conn-badge" class="badge disconnected" data-i18n="header.disconnected">未连接</div>
 
     <!-- Layout selector -->
@@ -170,8 +169,12 @@
     </div>
   </div>
 
+  <script>window.CAMERA_DEVICES = {{ camera_devices | safe }};</script>
+  <script>window.STREAM_TOKEN = "{{ stream_token }}";</script>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-  <script src="/static/i18n.js?v=5"></script>
-  <script src="/static/app.js?v=11"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="/static/vendor/three/ColladaLoader.js"></script>
+  <script src="/static/i18n.js?v=8"></script>
+  <script src="/static/app.js?v=49"></script>
 </body>
 </html>

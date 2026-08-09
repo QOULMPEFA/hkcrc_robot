@@ -489,6 +489,16 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   flex: 1;
   min-width: 80px;
 }
+.arm-joint-row input[type="number"] {
+  width: 52px;
+  padding: 1px 3px;
+  font-size: 11px;
+  text-align: center;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 3px;
+}
 .arm-joint-row .val {
   width: 38px;
   font-size: 11px;
@@ -501,6 +511,10 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   white-space: nowrap;
   min-width: 44px;
   text-align: right;
+}
+.joint-confirm-row {
+  text-align: right;
+  margin: 4px 0;
 }
 
 /* ── servo joint ───────────────────────────────────────────────────────────── */
@@ -558,6 +572,35 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.6; }
 }
+
+/* ── gimbal camera panel ────────────────────────────────────────────────────── */
+.gimbal-status {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 0;
+  text-align: center;
+}
+.gimbal-angles { margin: 8px 0; }
+.gimbal-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 14px;
+  font-family: var(--mono);
+}
+.gimbal-label { color: var(--muted); min-width: 40px; }
+.gimbal-val { color: var(--text); }
+.gimbal-target { color: var(--accent2); font-size: 12px; }
+.gimbal-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  margin-top: 8px;
+}
+.gimbal-input-row label { color: var(--muted); font-size: 12px; }
+.gimbal-input-row input { font-family: var(--mono); }
 
 /* ── panel diagnostics line ──────────────────────────────────────────────── */
 .panel-diag {
@@ -636,6 +679,40 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .cam-device-select:focus {
   outline: 1px solid var(--accent);
+}
+.cam-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.cam-mode-btns {
+  display: flex;
+  gap: 2px;
+  background: #1e2038;
+  border-radius: 6px;
+  padding: 2px;
+}
+.cam-mode-btn {
+  padding: 3px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cam-mode-btn:hover {
+  color: #ccc;
+}
+.cam-mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+.cam-mode-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ── footer ──────────────────────────────────────────────────────────────── */
@@ -948,4 +1025,137 @@ body.auth-page {
   .btn-reboot, .btn-shutdown { display: none; }
   .username { display: none; }
   .lang-switcher { font-size: 9px; padding: 2px 5px; min-width: 60px; }
+}
+
+/* ── Teleop debug visualization ─────────────────────────────────────────── */
+.teleop-layout {
+  display: grid;
+  grid-template-columns: minmax(340px, 420px) minmax(560px, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.teleop-panel.size-small,
+.teleop-panel.size-medium { grid-column: span 2; }
+.teleop-panel.size-large { grid-column: 1 / -1; }
+.teleop-controls { min-width: 0; }
+.teleop-viz {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: #12161f;
+}
+.pose-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+.pose-cell {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  background: #181c28;
+  overflow: hidden;
+}
+.pose-cell b {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-bottom: 4px;
+  white-space: nowrap;
+}
+.pose-cell span {
+  font-family: ui-monospace, Consolas, monospace;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.teleop-hand-viz .arm-urdf-canvas { height: 420px; }
+
+.arm-panel { grid-column: span 2; }
+.arm-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 560px);
+  gap: 12px;
+  align-items: start;
+}
+.arm-controls { min-width: 0; }
+.arm-urdf-viz {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: #12161f;
+}
+.arm-urdf-viz b {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.arm-urdf-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.arm-urdf-header b {
+  margin: 0;
+}
+.arm-urdf-zoom {
+  display: flex;
+  gap: 4px;
+}
+.arm-urdf-zoom button {
+  width: 26px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #22253a;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.arm-urdf-zoom button:hover { background: #2a2e4a; }
+.arm-urdf-status {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.arm-urdf-model-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+.arm-urdf-model-inputs input {
+  width: 58px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #1b1e30;
+  color: var(--text);
+  padding: 0 4px;
+}
+.arm-urdf-model-inputs button {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #22253a;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+}
+.arm-urdf-model-inputs button:hover { background: #2a2e4a; }
+.arm-urdf-canvas { width: 100%; height: 480px; display: block; }
+
+@media (max-width: 1100px) {
+  .teleop-layout { grid-template-columns: 1fr; }
+  .teleop-panel,
+  .teleop-panel.size-large { grid-column: span 1; }
+  .arm-layout { grid-template-columns: 1fr; }
+  .arm-panel { grid-column: span 1; }
 }

@@ -9,6 +9,7 @@ public class Main : MonoBehaviour
     private void Awake()
     {
         // DebugManager.instance.enableRuntimeUI = false;
+        Application.runInBackground = true;
         Application.logMessageReceived += OnLogMessageReceived;
         XRSettings.eyeTextureResolutionScale = 1.5f;
         // PXR_Manager.EnableVideoSeeThrough = true;

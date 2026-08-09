@@ -15,7 +15,7 @@ import subprocess
 import threading
 import time
 
-from flask import Flask, render_template, Response, request, session, redirect, url_for
+from flask import Flask, render_template, Response, request, session, redirect, url_for, send_file
 from flask_socketio import SocketIO, emit
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -278,6 +278,16 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.route("/assets/urdf/<path:filename>")
+def asset_urdf(filename):
+    """Serve URDF description assets for the browser teleop simulator."""
+    base = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", "urdf"))
+    path = os.path.realpath(os.path.join(base, filename))
+    if not path.startswith(base) or not os.path.isfile(path):
+        return Response("Not Found", status=404)
+    return send_file(path)
+
+
 # ── SocketIO — module handler registration ────────────────────────────────────
 
 def _register_module_handlers(robot: Robot):
@@ -508,7 +518,12 @@ def main():
     #
     # ── Jetson AGX Orin (full embodied intelligence robot) — active ─────
     config = {
-        "arm":    {"host": "192.168.56.101", "payload_mass": 0.5, "payload_cog": [0.0, 0.0, 0.05]},
+        "arm":    {
+            "host": "192.168.56.101",
+            "payload_mass": 0.5,
+            "payload_cog": [0.0, 0.0, 0.05],
+            "home_angles_deg": [0.0, -180.0, 135.0, -90.0, 0.0, 0.0],
+        },
         "ugv":    {"host": "127.0.0.1", "port": 9100},
         "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
         "camera": {"auto_detect": True, "width": 1280, "height": 720},
@@ -517,7 +532,15 @@ def main():
         "hand":   {"protocol": "modbus", "baudrate": 460800, "slave_id": 0x7F},
         "teleop": {
             "host": "192.168.56.101",
-            "vr_backend": "adb",              # "adb" (USB) | "xr_protocol" (TCP) | "xrt" (WiFi)
+            "arm_controller": "left",         # installed left arm; right reserved
+            "vr_backend": "xr_protocol",      # client_quest3 App over TCP | "xrt" (WiFi/OpenXR)
+            "vr_backend_kwargs": {"host": "0.0.0.0", "port": 63901},
+            "arm_speed_pct": 20.0,
+            "arm_delta_gain": 1.0,
+            "teleop_joint_range_deg": 60.0,
+            "hand_follow_enabled": False,     # disable grip-driven dexterous hand
+            "base_tilt_deg": 45.0,            # UR base mounted at 45° about Y
+            "base_tilt_sign": 1.0,            # set -1 if installed mirrored
             "head_yaw_sign": -1,
             "head_yaw_gain": 1.0,
             "head_pitch_gain": 1.0,

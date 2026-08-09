@@ -97,10 +97,10 @@ const I18n = {
  * ─────────────────────────────────────────────────────────────────────── */
 
 /* === header / chrome === */
-I18n.zh["header.page_title"]        = "具身智能机器人控制面板 | Embodied Intelligence Robot";
-I18n.zh["header.panel_title"]       = "具身智能机器人控制面板";
-I18n.zh["header.robot_type_tag"]    = "🦾 具身智能机器人";
-I18n.zh["header.hardware_summary"]  = "UR5e 机械臂 + UGV 底盘 + 灵巧手 + 升降平台";
+I18n.zh["header.page_title"]        = "机器人控制面板 | Robot Control Panel";
+I18n.zh["header.panel_title"]       = "机器人控制面板";
+I18n.zh["header.robot_type_tag"]    = "机器人";
+I18n.zh["header.hardware_summary"]  = "";
 I18n.zh["header.connected"]    = "已连接";
 I18n.zh["header.disconnected"] = "未连接";
 I18n.zh["header.select_layout"] = "— 选择布局 —";
@@ -122,10 +122,10 @@ I18n.zh["header.role_viewer"]   = "观察员";
 I18n.zh["header.role_operator"] = "操作员";
 I18n.zh["header.role_admin"]    = "管理员";
 
-I18n.en["header.page_title"]        = "Embodied Intelligence Robot | 具身智能机器人";
-I18n.en["header.panel_title"]       = "Embodied Intelligence Robot Panel";
-I18n.en["header.robot_type_tag"]    = "🦾 Embodied Intelligence Robot";
-I18n.en["header.hardware_summary"]  = "UR5e Arm + UGV Chassis + Dexterous Hand + Lift Platform";
+I18n.en["header.page_title"]        = "Robot Control Panel | 机器人控制面板";
+I18n.en["header.panel_title"]       = "Robot Control Panel";
+I18n.en["header.robot_type_tag"]    = "Robot";
+I18n.en["header.hardware_summary"]  = "";
 I18n.en["header.connected"]    = "Connected";
 I18n.en["header.disconnected"] = "Disconnected";
 I18n.en["header.select_layout"] = "— Select Layout —";
@@ -174,6 +174,7 @@ I18n.zh["module.gimbal"] = "云台控制";
 I18n.zh["module.joint"]  = "关节控制";
 I18n.zh["module.drive"]  = "驱动电机";
 I18n.zh["module.demo"]   = "演示序列";
+I18n.zh["module.teleop"] = "XR 遥操作";
 
 I18n.en["module.camera"] = "Camera";
 I18n.en["module.ugv"]    = "UGV Chassis";
@@ -186,6 +187,96 @@ I18n.en["module.gimbal"] = "Gimbal";
 I18n.en["module.joint"]  = "Joint";
 I18n.en["module.drive"]  = "Drive Motor";
 I18n.en["module.demo"]   = "Demo Sequence";
+I18n.en["module.teleop"] = "XR Teleop";
+
+/* === teleop panel === */
+I18n.zh["teleop.xr_status"]    = "XR:";
+I18n.zh["teleop.active"]       = "遥操作:";
+I18n.zh["teleop.tracking"]     = "跟踪中:";
+I18n.zh["teleop.calibrated"]   = "已标定:";
+I18n.zh["teleop.position"]     = "位置";
+I18n.zh["teleop.trigger"]      = "扳机:";
+I18n.zh["teleop.enable"]       = "启用遥操作";
+I18n.zh["teleop.disable"]      = "禁用遥操作";
+I18n.zh["teleop.calibrate"]    = "标定参考位";
+I18n.zh["teleop.toggle_log"]   = "数据记录";
+I18n.zh["teleop.active_yes"]   = "已启用";
+I18n.zh["teleop.active_no"]    = "未启用";
+I18n.zh["teleop.tracking_yes"] = "跟踪中";
+I18n.zh["teleop.tracking_no"]  = "待机";
+I18n.zh["teleop.calib_yes"]    = "已标定";
+I18n.zh["teleop.calib_no"]     = "未标定";
+I18n.zh["teleop.target"]       = "目 ";
+I18n.zh["teleop.actual"]       = "实 ";
+
+I18n.en["teleop.xr_status"]    = "XR:";
+I18n.en["teleop.active"]       = "Teleop:";
+I18n.en["teleop.tracking"]     = "Tracking:";
+I18n.en["teleop.calibrated"]   = "Calibrated:";
+I18n.en["teleop.position"]     = "Position";
+I18n.en["teleop.trigger"]      = "Trigger:";
+I18n.en["teleop.enable"]       = "Enable Teleop";
+I18n.en["teleop.disable"]      = "Disable Teleop";
+I18n.en["teleop.calibrate"]    = "Calibrate Ref";
+I18n.en["teleop.toggle_log"]   = "Data Log";
+I18n.en["teleop.active_yes"]   = "Active";
+I18n.en["teleop.active_no"]    = "Inactive";
+I18n.en["teleop.tracking_yes"] = "Tracking";
+I18n.en["teleop.tracking_no"]  = "Standby";
+I18n.en["teleop.calib_yes"]    = "Yes";
+I18n.en["teleop.calib_no"]     = "No";
+I18n.en["teleop.target"]       = "Tgt ";
+I18n.en["teleop.actual"]       = "Act ";
+
+/* === teleop gimbal head tracking === */
+I18n.zh["teleop.gimbal_section"]      = "头部跟踪 (云台)";
+I18n.zh["teleop.gimbal_status"]       = "云台:";
+I18n.zh["teleop.gimbal_tracking"]     = "跟踪:";
+I18n.zh["teleop.gimbal_calibrated"]   = "已标定:";
+I18n.zh["teleop.gimbal_head_yaw"]     = "头部偏航";
+I18n.zh["teleop.gimbal_head_pitch"]   = "头部俯仰";
+I18n.zh["teleop.gimbal_enable"]       = "启用头部跟踪";
+I18n.zh["teleop.gimbal_disable"]      = "禁用头部跟踪";
+I18n.zh["teleop.gimbal_calibrate"]    = "标定头部参考位";
+I18n.zh["teleop.gimbal_home"]         = "云台归位";
+I18n.zh["teleop.gimbal_unavailable"]  = "不可用";
+I18n.zh["teleop.gimbal_limits"]     = "限位";
+
+I18n.en["teleop.gimbal_section"]      = "Head Tracking (Gimbal)";
+I18n.en["teleop.gimbal_status"]       = "Gimbal:";
+I18n.en["teleop.gimbal_tracking"]     = "Tracking:";
+I18n.en["teleop.gimbal_calibrated"]   = "Calibrated:";
+I18n.en["teleop.gimbal_head_yaw"]     = "Head Yaw";
+I18n.en["teleop.gimbal_head_pitch"]   = "Head Pitch";
+I18n.en["teleop.gimbal_enable"]       = "Enable Head Track";
+I18n.en["teleop.gimbal_disable"]      = "Disable Head Track";
+I18n.en["teleop.gimbal_calibrate"]    = "Calibrate Head Ref";
+I18n.en["teleop.gimbal_home"]         = "Gimbal Home";
+I18n.en["teleop.gimbal_unavailable"]  = "N/A";
+I18n.en["teleop.gimbal_limits"]     = "Limits";
+
+/* === teleop video bridge (RealSense -> Quest 3) === */
+I18n.zh["teleop.video_section"]  = "视频图传 (RealSense → Quest 3)";
+I18n.zh["teleop.video_status"]   = "图传:";
+I18n.zh["teleop.video_client"]   = "头显:";
+I18n.zh["teleop.video_ports"]    = "端口";
+I18n.zh["teleop.video_running"]  = "运行中";
+I18n.zh["teleop.video_stopped"]  = "未启动";
+I18n.zh["teleop.video_start"]    = "启动图传";
+I18n.zh["teleop.video_stop"]     = "停止图传";
+I18n.zh["teleop.video_restart"]  = "重启图传";
+I18n.zh["teleop.video_log"]      = "查看日志";
+
+I18n.en["teleop.video_section"]  = "Video Bridge (RealSense → Quest 3)";
+I18n.en["teleop.video_status"]   = "Bridge:";
+I18n.en["teleop.video_client"]   = "Headset:";
+I18n.en["teleop.video_ports"]    = "Ports";
+I18n.en["teleop.video_running"]  = "Running";
+I18n.en["teleop.video_stopped"]  = "Stopped";
+I18n.en["teleop.video_start"]    = "Start Bridge";
+I18n.en["teleop.video_stop"]     = "Stop Bridge";
+I18n.en["teleop.video_restart"]  = "Restart Bridge";
+I18n.en["teleop.video_log"]      = "View Log";
 
 /* === camera panel === */
 I18n.zh["camera.offline"]  = "摄像头未连接";
@@ -198,6 +289,16 @@ I18n.zh["camera.status_lost"] = "信号丢失";
 I18n.zh["camera.status_stale"] = "信号延迟";
 I18n.zh["camera.status_waiting"] = "等待画面...";
 I18n.zh["camera.select_device"] = "选择设备";
+I18n.zh["camera.scan"]      = "扫描摄像头";
+I18n.zh["camera.scanning"]  = "扫描中...";
+I18n.zh["camera.video_bridge"]      = "图传到头显";
+I18n.zh["camera.video_bridging"]    = "切换中...";
+I18n.zh["camera.video_bridge_hint"] = "把当前选中的摄像头推送到 Quest 头显（已在图传时直接换源，无需重连）";
+I18n.zh["camera.video_bridge_on"]   = "图传中:";
+I18n.zh["camera.mode_color"]  = "彩色";
+I18n.zh["camera.mode_stereo"] = "双目";
+I18n.zh["camera.mode_depth"]  = "深度";
+I18n.zh["camera.mode_label"]  = "模式";
 
 I18n.en["camera.offline"]  = "Camera Offline";
 I18n.en["camera.loading"]  = "Loading...";
@@ -205,10 +306,65 @@ I18n.en["camera.status"]   = "MJPEG";
 I18n.en["camera.reset"]    = "Reset Camera";
 I18n.en["camera.resetting"] = "Resetting...";
 I18n.en["camera.reset_ok"]  = "Camera Reset OK";
+I18n.en["camera.scan"]      = "Scan Cameras";
+I18n.en["camera.scanning"]  = "Scanning...";
 I18n.en["camera.status_lost"] = "Signal Lost";
 I18n.en["camera.status_stale"] = "Stale";
 I18n.en["camera.status_waiting"] = "Waiting...";
 I18n.en["camera.select_device"] = "Select Device";
+I18n.en["camera.video_bridge"]      = "Stream to HMD";
+I18n.en["camera.video_bridging"]    = "Switching...";
+I18n.en["camera.video_bridge_hint"] = "Stream the selected camera to the Quest headset (switches source live — no reconnect needed)";
+I18n.en["camera.video_bridge_on"]   = "Streaming:";
+I18n.en["camera.mode_color"]  = "Color";
+I18n.en["camera.mode_stereo"] = "Stereo";
+I18n.en["camera.mode_depth"]  = "Depth";
+I18n.en["camera.mode_label"]  = "Mode";
+
+/* === gimbal panel === */
+I18n.zh["gimbal.title"]       = "云台相机控制";
+I18n.zh["gimbal.yaw"]         = "偏航";
+I18n.zh["gimbal.pitch"]       = "俯仰";
+I18n.zh["gimbal.target"]      = "目标";
+I18n.zh["gimbal.current"]     = "当前";
+I18n.zh["gimbal.home"]        = "归零";
+I18n.zh["gimbal.damping"]     = "阻尼模式";
+I18n.zh["gimbal.move_to"]     = "移动到";
+I18n.zh["gimbal.move_up"]     = "上仰";
+I18n.zh["gimbal.move_down"]   = "下俯";
+I18n.zh["gimbal.move_left"]   = "左转";
+I18n.zh["gimbal.move_right"]  = "右转";
+I18n.zh["gimbal.step"]        = "步长";
+I18n.zh["gimbal.not_connected"] = "云台未连接";
+I18n.zh["gimbal.home_pos"]     = "原点";
+I18n.zh["gimbal.set_home"]     = "设为原点";
+I18n.zh["gimbal.rel_angle"]    = "相对原点";
+I18n.zh["gimbal.optimizer"]    = "跨轴前馈";
+I18n.zh["gimbal.optimizer_on"] = "前馈: 开";
+I18n.zh["gimbal.optimizer_off"] = "前馈: 关";
+I18n.zh["module.gimbal"]      = "云台相机";
+
+I18n.en["gimbal.title"]       = "Gimbal Camera Control";
+I18n.en["gimbal.yaw"]         = "Yaw";
+I18n.en["gimbal.pitch"]       = "Pitch";
+I18n.en["gimbal.target"]      = "Target";
+I18n.en["gimbal.current"]     = "Cur";
+I18n.en["gimbal.home"]        = "Home";
+I18n.en["gimbal.damping"]     = "Damping";
+I18n.en["gimbal.move_to"]     = "Move To";
+I18n.en["gimbal.move_up"]     = "Up";
+I18n.en["gimbal.move_down"]   = "Down";
+I18n.en["gimbal.move_left"]   = "Left";
+I18n.en["gimbal.move_right"]  = "Right";
+I18n.en["gimbal.step"]        = "Step";
+I18n.en["gimbal.not_connected"] = "Gimbal offline";
+I18n.en["gimbal.home_pos"]     = "Home Pos";
+I18n.en["gimbal.set_home"]     = "Set Home";
+I18n.en["gimbal.rel_angle"]    = "Rel to Home";
+I18n.en["gimbal.optimizer"]    = "Cross-Axis FF";
+I18n.en["gimbal.optimizer_on"] = "FF: ON";
+I18n.en["gimbal.optimizer_off"] = "FF: OFF";
+I18n.en["module.gimbal"]      = "Gimbal Camera";
 
 /* === UGV panel === */
 I18n.zh["ugv.connection"]    = "连接：";
@@ -319,6 +475,7 @@ I18n.zh["arm.collision"]       = "碰撞检测";
 I18n.zh["arm.enable"]          = "使能";
 I18n.zh["arm.disable"]         = "断开动力";
 I18n.zh["arm.home"]            = "回零";
+I18n.zh["arm.set_home"]        = "设为回零";
 I18n.zh["arm.stop"]            = "停止";
 I18n.zh["arm.reset"]           = "解除保护性停止";
 I18n.zh["arm.connected"]       = "已连接";
@@ -331,6 +488,7 @@ I18n.zh["arm.fault"]           = "FAULT";
 I18n.zh["arm.log_label"]       = "运行日志";
 I18n.zh["arm.log_toggle"]      = "运行日志 ▾";
 I18n.zh["arm.actual_prefix"]   = "实 ";
+I18n.zh["arm.exec"]            = "执行";
 
 I18n.en["arm.connection"]      = "Connection:";
 I18n.en["arm.enabled"]         = "Enabled:";
@@ -342,6 +500,7 @@ I18n.en["arm.collision"]       = "Collision Sensitivity";
 I18n.en["arm.enable"]          = "Enable";
 I18n.en["arm.disable"]         = "Disable Power";
 I18n.en["arm.home"]            = "Home";
+I18n.en["arm.set_home"]        = "Set Home";
 I18n.en["arm.stop"]            = "Stop";
 I18n.en["arm.reset"]           = "Reset Protective Stop";
 I18n.en["arm.connected"]       = "Connected";
@@ -354,6 +513,7 @@ I18n.en["arm.fault"]           = "FAULT";
 I18n.en["arm.log_label"]       = "Log";
 I18n.en["arm.log_toggle"]      = "Log ▾";
 I18n.en["arm.actual_prefix"]   = "Act ";
+I18n.en["arm.exec"]            = "Execute";
 
 /* === hand panel === */
 I18n.zh["hand.status"]       = "状态：";
@@ -364,11 +524,14 @@ I18n.zh["hand.pinch"]        = "捏取";
 I18n.zh["hand.send"]         = "发送";
 I18n.zh["hand.enabled"]      = "已使能";
 I18n.zh["hand.disabled"]     = "未使能";
+I18n.zh["hand.enable"]       = "使能";
+I18n.zh["hand.disable"]      = "断开使能";
 I18n.zh["hand.finger.0"]     = "拇指";
-I18n.zh["hand.finger.1"]     = "食指";
-I18n.zh["hand.finger.2"]     = "中指";
-I18n.zh["hand.finger.3"]     = "无名指";
-I18n.zh["hand.finger.4"]     = "小指";
+I18n.zh["hand.finger.1"]     = "拇指第二关节";
+I18n.zh["hand.finger.2"]     = "食指";
+I18n.zh["hand.finger.3"]     = "中指";
+I18n.zh["hand.finger.4"]     = "无名指";
+I18n.zh["hand.finger.5"]     = "小指";
 
 I18n.en["hand.status"]       = "Status:";
 I18n.en["hand.force"]        = "Grip Force:";
@@ -378,11 +541,14 @@ I18n.en["hand.pinch"]        = "Pinch";
 I18n.en["hand.send"]         = "Send";
 I18n.en["hand.enabled"]      = "Enabled";
 I18n.en["hand.disabled"]     = "Disabled";
+I18n.en["hand.enable"]       = "Enable";
+I18n.en["hand.disable"]      = "Disable";
 I18n.en["hand.finger.0"]     = "Thumb";
-I18n.en["hand.finger.1"]     = "Index";
-I18n.en["hand.finger.2"]     = "Middle";
-I18n.en["hand.finger.3"]     = "Ring";
-I18n.en["hand.finger.4"]     = "Pinky";
+I18n.en["hand.finger.1"]     = "Thumb J2";
+I18n.en["hand.finger.2"]     = "Index";
+I18n.en["hand.finger.3"]     = "Middle";
+I18n.en["hand.finger.4"]     = "Ring";
+I18n.en["hand.finger.5"]     = "Pinky";
 
 /* === motor panel === */
 I18n.zh["motor.connected"]   = "已连接";

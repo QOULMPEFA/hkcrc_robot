@@ -1,66 +1,59 @@
 # XR Teleoperation SDK — Meta Quest 3 → UR5e + BrainCo Hand
 
-Two teleoperation backends for different hardware setups:
+Two connection paths for the Quest 3:
 
-| Backend | VR Connection | Robot | Extra Hardware |
-|---------|-------------|-------|---------------|
-| **UR5eTeleopADB** (new) | Quest 3 via USB/ADB | UR5e (URScript TCP) | None — runs on any PC |
-| **TeleopModule** (existing) | Quest 3 via WiFi/OpenXR | UR5 + Hand + Gimbal | Jetson AGX Orin + XRoboToolkit-PC-Service |
+| Path | Quest Client | Robot | Extra Hardware |
+|------|-------------|-------|---------------|
+| **client_quest3 (TCP)** | `client_quest3/` — full XRoboToolkit-Quest Unity app | UR5e (URScript TCP) via `TeleopModule` | None — runs on any PC the Quest can reach |
+| **WiFi/OpenXR (Jetson)** | XRoboToolkit-Quest app + XRoboToolkit-PC-Service | UR5 + Hand + Gimbal | Jetson AGX Orin |
 
-## Quick Start — USB/ADB (Recommended for UR5e)
+The ADB/oculus_reader path was removed — Quest data now always comes from the
+full `client_quest3` app over TCP (port 63901).
 
-This runs directly on your Windows/Linux PC — no Jetson or WiFi needed.
+## Recommended path — client_quest3 over TCP (UR5e)
 
 ```
-Quest 3 (USB) ──ADB──▶ oculus_reader ──▶ UR5eTeleopADB ──TCP──▶ UR5e robot
+Quest 3 (XRoboToolkit-Quest app)
+   | WiFi (same LAN)
+   v
+robot server (this PC)  ── XRProtocolReceiver :63901 (TCP) ──▶ TeleopModule
+                                                                  |
+                                                                  v
+                                                     UR5e (servoj via arm module)
 ```
 
-### Prerequisites
+### 1. Build / install the Quest app
 
-1. **ADB** (Android SDK Platform Tools) — [download](https://developer.android.com/tools/releases/platform-tools)
-2. **Quest 3** with Developer Mode enabled (via Meta Quest phone app)
-3. **Python 3.8+** with `numpy` and `pure-python-adb`
-
-### Setup
+The Unity project is `teleoperation_sdk/client_quest3/` (see its README for the
+XRoboToolkit-Quest client). Build via the `Build/One-Click Package` menu, or
+use a prebuilt APK:
 
 ```bash
-# 1. Install Python dependencies
-pip install numpy pure-python-adb
-
-# 2. Connect Quest 3 via USB, accept the "Allow USB debugging" prompt in headset
-
-# 3. Verify ADB sees the device
-adb devices
-# Should show: 1Wxxx...  device
-
-# 4. Install the teleop APK on Quest 3
-python run_teleop_ur5e.py --install-apk
-
-# 5. Run teleoperation
-python run_teleop_ur5e.py --ur-host 192.168.56.101
+# from teleoperation_sdk/
+adb install -r output_apk/quest_verify.apk
 ```
 
-### Usage
+### 2. Run the robot server with the xr_protocol backend
 
 ```bash
-# Basic — right controller drives arm, UR5 at default IP
-python run_teleop_ur5e.py
-
-# Left controller
-python run_teleop_ur5e.py --controller left
-
-# Custom UR5 IP and sensitivity
-python run_teleop_ur5e.py --ur-host 192.168.1.100 --scale 0.3 --rot-scale 0.2
-
-# Custom coordinate mapping (flip axes for your UR5 mounting)
-python run_teleop_ur5e.py --vr-map "0,0,-1, 1,0,0, 0,1,0"
-
-# Run for 60 seconds then stop
-python run_teleop_ur5e.py --duration 60
-
-# Verbose debug output
-python run_teleop_ur5e.py -v
+python -m robot_control.web_gui.server
 ```
+
+Config in `robot_control/web_gui/server.py`:
+
+```python
+"teleop": {
+    "host": "<UR5 IP>",
+    "vr_backend": "xr_protocol",          # Quest data from client_quest3 app
+    "vr_backend_kwargs": {"host": "0.0.0.0", "port": 63901},
+    ...
+}
+```
+
+### 3. Connect
+
+On the Quest app, enter this PC's LAN IP in the **Network - PC Service** field
+and connect. Toggle **Tracking - Send** so the headset streams controller data.
 
 ### Controls
 
@@ -68,47 +61,21 @@ python run_teleop_ur5e.py -v
 |----------|--------|
 | **Grip** (middle finger) | Dead-man switch — hold to move arm, release to freeze |
 | **Controller movement** | Drives UR5e TCP in Cartesian space |
-| **Ctrl+C** (keyboard) | Emergency stop → `stopj(2.0)` |
-
-### Coordinate Mapping
-
-VR controller space → UR5 base frame is configured via `--vr-map`:
-
-```
-VR:  X=right, Y=up, Z=forward
-UR5: X=forward, Y=left, Z=up  (standard mounting)
-
-Default mapping:
-  UR5_X = VR_Z    (controller forward/back → robot forward/back)
-  UR5_Y = VR_X    (controller left/right → robot left/right)
-  UR5_Z = VR_Y    (controller up/down → robot up/down)
-```
-
-If your UR5 is wall/ceiling mounted, adjust signs with `--vr-map "0,0,-1, -1,0,0, 0,1,0"` etc.
+| **Trigger** | Drives the BrainCo hand open/close |
+| Web GUI / Ctrl+C | Emergency stop → `stopj(2.0)` |
 
 ### Safety
 
 - **Grip button** = dead-man switch (release → arm holds position)
 - **Workspace bounds** enforced before every servoj command (configurable via `--ws-min`/`--ws-max`)
 - **Joint velocity limit** at 1.5 rad/s per joint per step
-- **Emergency stop** on Ctrl+C sends `stopj(2.0)` with maximum deceleration
-
-### Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| `Device not found` | `adb devices` — ensure USB debugging allowed in headset |
-| `APK install failed` | Check Developer Mode is on; try `--install-apk` again |
-| `UR5 connect failed` | Verify UR5 IP and that port 30001/30002 are reachable |
-| Controller not responding | Ensure teleop APK is running (check Quest app drawer) |
-| Arm doesn't move | Hold **grip** button while moving controller |
-| `ImportError: No module named 'ppadb'` | `pip install pure-python-adb` |
+- **Emergency stop** sends `stopj(2.0)` with maximum deceleration
 
 ---
 
 ## WiFi/OpenXR Backend (Jetson + Hand + Gimbal)
 
-The existing `TeleopModule` uses XRoboToolkit-PC-Service for OpenXR communication. See `teleop.py` docstring and the [setup script](setup_xr_teleop.sh) for Jetson deployment.
+The existing `TeleopModule` uses XRoboToolkit-PC-Service for OpenXR communication. See the `teleop.py` docstring and [setup_xr_teleop.sh](setup_xr_teleop.sh) for Jetson deployment.
 
 ```
 Meta Quest 3 (OpenXR Unity App)
@@ -117,16 +84,12 @@ Meta Quest 3 (OpenXR Unity App)
 Jetson AGX Orin
   +-- XRoboToolkit-PC-Service (C++)    receives controller + head poses
   +-- xrobotoolkit_sdk (pybind11)      Python bindings
-  +-- teleoperation_sdk/teleop.py      TeleopModule
+  +-- teleoperation_sdk/teleop.py      TeleopModule (vr_backend: "xrt")
               |          |            |
               v          v            v
      UR5 arm (TCP)  BrainCo Hand  Gimbal Camera
                    (Modbus)       (CH340 UART Servos)
 ```
-
-### Head Tracking → Gimbal
-
-The Quest 3 HMD orientation drives the 2-axis gimbal camera independently of arm tracking.
 
 ## Directory Map
 
@@ -134,14 +97,12 @@ The Quest 3 HMD orientation drives the 2-axis gimbal camera independently of arm
 teleoperation_sdk/
   README.md                    ← this file
   __init__.py                  ← package init, public API exports
-  teleop.py                    ← TeleopModule (WiFi/OpenXR backend, RobotModule)
-  teleop_ur5e_adb.py           ← UR5eTeleopADB (USB/ADB backend, standalone)
+  teleop.py                    ← TeleopModule (VR-backend agnostic, RobotModule)
+  vr_backends.py               ← VRBackend ABC + XRBackend + XRProtocolBackend + factory
+  xr_protocol.py               ← XRProtocolReceiver: TCP 63901 parser for client_quest3
   ur5_ik.py                    ← UR5 numerical IK (damped least-squares Jacobian)
-  install_quest_apk.py         ← Helper to install teleop APK on Quest 3
-  setup_xr_teleop.sh           ← Build script for Jetson ARM64
-
-  oculus_reader/               ← ADB-based Quest communication (from rail-berkeley)
-    reader.py                  ← OculusReader: ADB + logcat parsing
-    buttons_parser.py          ← Button state parser
-    APK/S2R2S-teleop.apk       ← Pre-built Android APK for Quest 2/3
+  video_bridge.py              ← RealSense → Quest JPEG/UDP relay helpers
+  client_quest3/               ← XRoboToolkit-Quest Unity client project (Quest side)
+  reference/                   ← upstream reference copies (not imported)
+  tools/adb.exe                ← platform-tools adb (install APK / logcat)
 ```

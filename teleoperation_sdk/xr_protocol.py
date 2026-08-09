@@ -3,8 +3,11 @@
 Parses the binary packet format used by the XRoboToolkit-Quest Unity app
 to stream headset + controller + hand tracking data over TCP.
 
-Protocol (from PackageHandle.cs):
-  [HEAD:1B=0xCF][CMD:1B][PARAM_LEN:4B int32 LE][PARAMS:N bytes][TIMESTAMP:8B int64 LE][END:1B=0xA5]
+Protocol (from client_quest3 PackageHandle.cs).  NOTE the HEAD byte is
+directional — the Quest sends with SEND_PACKET_HEAD (0x3F) and expects to
+receive RECEIVE_PACKET_HEAD (0xCF):
+  Quest→PC: [HEAD:1B=0x3F][CMD:1B][PARAM_LEN:4B int32 LE][PARAMS:N][TS:8B int64 LE][END:1B=0xA5]
+  PC→Quest: [HEAD:1B=0xCF][CMD:1B][...same...]
 
 Tracking data arrives as CMD=0x6D (PACKET_CCMD_TO_CONTROLLER_FUNCTION)
 with PARAMS containing JSON: {"functionName":"Tracking","value":"<tracking_json>"}
@@ -28,7 +31,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-HEAD = 0xCF
+# HEAD byte the Quest app puts on the wire when sending to us
+# (PackageHandle.Pack → SEND_PACKET_HEAD).  Parser accepts both 0x3F and 0xCF
+# so a firmware/APK that uses the other convention still parses.
+HEAD = 0x3F
+HEAD_ALT = 0xCF
 END = 0xA5
 CMD_TRACKING = 0x6D
 CMD_VERSION = 0x6C
@@ -40,8 +47,9 @@ CMD_TO_CONTROLLER = 0x6D    # PACKET_CCMD_TO_CONTROLLER_FUNCTION (tracking + cus
 HEADER_SIZE = 15   # 1(HEAD) + 1(CMD) + 4(PARAM_LEN) + 8(TIMESTAMP) + 1(END)
 READ_TIMEOUT = 2.0  # seconds for recv()
 
-# Packet byte values for sending (mirroring NetCMD.cs)
-SEND_PACKET_HEAD = 0x3F
+# Packet HEAD byte we send to the Quest — it requires RECEIVE_PACKET_HEAD (0xCF)
+# in PackageHandle.Unpack (mirroring NetCMD.cs).
+SEND_PACKET_HEAD = 0xCF
 SEND_PACKET_END = 0xA5
 
 
@@ -254,13 +262,19 @@ class XRProtocolReceiver:
                     self._connected = False
                 break
 
+    @staticmethod
+    def _next_head(buf: bytes, start: int) -> int:
+        """Index of the next possible HEAD byte (0x3F or 0xCF) at/after start."""
+        candidates = [i for i in (buf.find(HEAD, start), buf.find(HEAD_ALT, start)) if i >= 0]
+        return min(candidates) if candidates else -1
+
     def _parse_buffer(self, buf: bytes) -> bytes:
         """Extract complete packets from buffer. Returns remaining bytes."""
         while len(buf) >= HEADER_SIZE:
             head = buf[0]
-            if head != HEAD:
-                # Skip until next HEAD byte
-                idx = buf.find(HEAD, 1)
+            if head not in (HEAD, HEAD_ALT):
+                # Skip until the next possible HEAD byte
+                idx = self._next_head(buf, 1)
                 if idx < 0:
                     return b""
                 buf = buf[idx:]
@@ -276,7 +290,7 @@ class XRProtocolReceiver:
             end = buf[total - 1]
             if end != END:
                 # Corrupt — skip this HEAD byte
-                idx = buf.find(HEAD, 1)
+                idx = self._next_head(buf, 1)
                 if idx < 0:
                     return b""
                 buf = buf[idx:]

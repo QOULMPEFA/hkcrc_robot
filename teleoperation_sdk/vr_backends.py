@@ -1,8 +1,7 @@
 """VR backend abstraction — swappable Quest 3 data sources for TeleopModule.
 
-Three backends:
+Two backends:
   XRBackend          — xrobotoolkit_sdk (WiFi/OpenXR, existing Jetson path)
-  ADBBackend         — OculusReader (USB/ADB logcat, simple S2R2S-teleop APK)
   XRProtocolBackend  — XRProtocolReceiver (TCP, full XRoboToolkit-Quest APK)
 
 All conform to VRBackend ABC — TeleopModule calls the same interface regardless
@@ -11,12 +10,8 @@ of which Quest connection method is in use.
 
 import abc
 import logging
-import math
 from typing import Any, Dict, List, Optional
 
-import numpy as np
-
-from teleoperation_sdk.oculus_reader.reader import OculusReader
 from teleoperation_sdk.xr_protocol import XRProtocolReceiver
 
 log = logging.getLogger(__name__)
@@ -161,149 +156,6 @@ class XRBackend(VRBackend):
         return None
 
 
-# ── ADBBackend (USB via OculusReader + simple S2R2S-teleop APK) ─────────────
-
-def _rotation_matrix_to_quat(R: np.ndarray) -> List[float]:
-    """Convert 3x3 rotation matrix to quaternion [qx, qy, qz, qw]."""
-    trace = np.trace(R)
-    if trace > 0:
-        s = 0.5 / math.sqrt(trace + 1.0)
-        w = 0.25 / s
-        x = (R[2, 1] - R[1, 2]) * s
-        y = (R[0, 2] - R[2, 0]) * s
-        z = (R[1, 0] - R[0, 1]) * s
-    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-        s = 2.0 * math.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
-        w = (R[2, 1] - R[1, 2]) / s
-        x = 0.25 * s
-        y = (R[0, 1] + R[1, 0]) / s
-        z = (R[0, 2] + R[2, 0]) / s
-    elif R[1, 1] > R[2, 2]:
-        s = 2.0 * math.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
-        w = (R[0, 2] - R[2, 0]) / s
-        x = (R[0, 1] + R[1, 0]) / s
-        y = 0.25 * s
-        z = (R[1, 2] + R[2, 1]) / s
-    else:
-        s = 2.0 * math.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
-        w = (R[1, 0] - R[0, 1]) / s
-        x = (R[0, 2] + R[2, 0]) / s
-        y = (R[1, 2] + R[2, 1]) / s
-        z = 0.25 * s
-    return [x, y, z, w]
-
-
-class ADBBackend(VRBackend):
-    """Backend wrapping OculusReader (USB/ADB, simple S2R2S-teleop APK).
-
-    The simple APK only streams 4x4 controller transforms via logcat — no
-    headset pose, no hand tracking. get_headset_pose() always returns None.
-    """
-
-    def __init__(self, ip_address: Optional[str] = None):
-        self._ip_address = ip_address
-        self._reader: Optional[OculusReader] = None
-
-    def init(self) -> bool:
-        try:
-            self._reader = OculusReader(ip_address=self._ip_address, run=True)
-            log.info("[ADBBackend] OculusReader started (ip=%s)", self._ip_address or "USB")
-            return True
-        except Exception as e:
-            log.error("[ADBBackend] OculusReader init failed: %s", e)
-            return False
-
-    def close(self) -> None:
-        if self._reader is not None:
-            try:
-                self._reader.stop()
-            except Exception:
-                pass
-            self._reader = None
-
-    def is_connected(self) -> bool:
-        return self._reader is not None and self._reader.running
-
-    def _get_transform(self, side: str) -> Optional[np.ndarray]:
-        """Read 4x4 transform matrix for a controller side."""
-        if self._reader is None:
-            return None
-        try:
-            transforms, _buttons = self._reader.get_transformations_and_buttons()
-            if transforms is None:
-                return None
-            key = 'r' if side == 'right' else 'l'
-            return transforms.get(key)
-        except Exception:
-            return None
-
-    def get_controller_pose(self, side: str) -> Optional[List[float]]:
-        T = self._get_transform(side)
-        if T is None:
-            return None
-        pos = [float(T[0, 3]), float(T[1, 3]), float(T[2, 3])]
-        quat = _rotation_matrix_to_quat(T[:3, :3])
-        return pos + quat
-
-    def get_trigger(self, side: str) -> float:
-        if self._reader is None:
-            return 0.0
-        try:
-            _transforms, buttons = self._reader.get_transformations_and_buttons()
-            if buttons is None:
-                return 0.0
-            key = f"{'right' if side == 'right' else 'left'}Trig"
-            val = buttons.get(key, 0.0)
-            if isinstance(val, (tuple, list)):
-                val = val[0] if val else 0.0
-            return float(val)
-        except Exception:
-            return 0.0
-
-    def get_grip(self, side: str) -> float:
-        if self._reader is None:
-            return 0.0
-        try:
-            _transforms, buttons = self._reader.get_transformations_and_buttons()
-            if buttons is None:
-                return 0.0
-            key = f"{'right' if side == 'right' else 'left'}Grip"
-            val = buttons.get(key, 0.0)
-            if isinstance(val, (tuple, list)):
-                val = val[0] if val else 0.0
-            return float(val)
-        except Exception:
-            return 0.0
-
-    def get_button(self, side: str, name: str) -> bool:
-        if self._reader is None:
-            return False
-        try:
-            _transforms, buttons = self._reader.get_transformations_and_buttons()
-            if buttons is None:
-                return False
-            # The simple APK button mapping — depends on what parse_buttons returns
-            # Primary/secondary map to A/X and B/Y
-            btn_map = {
-                "primaryButton": ("right" if side == "right" else "left") + "A",
-                "secondaryButton": ("right" if side == "right" else "left") + "B",
-                "menuButton": ("right" if side == "right" else "left") + "Menu",
-            }
-            key = btn_map.get(name, "")
-            if not key:
-                return False
-            val = buttons.get(key, False)
-            if isinstance(val, (tuple, list)):
-                val = val[0] if val else False
-            return bool(val)
-        except Exception:
-            return False
-
-    def get_headset_pose(self) -> Optional[List[float]]:
-        # Simple APK does not stream headset pose
-        return None
-
-
 # ── XRProtocolBackend (TCP via XRoboToolkit-Quest APK) ──────────────────────
 
 class XRProtocolBackend(VRBackend):
@@ -393,12 +245,11 @@ def create_vr_backend(name: str, **kwargs) -> Optional[VRBackend]:
     """Create a VR backend by name.
 
     Args:
-        name: "xrt" | "adb" | "xr_protocol"
+        name: "xrt" | "xr_protocol"
         **kwargs: passed to the backend constructor
     """
     backends = {
         "xrt": XRBackend,
-        "adb": ADBBackend,
         "xr_protocol": XRProtocolBackend,
     }
     cls = backends.get(name)
