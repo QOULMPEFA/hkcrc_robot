@@ -3,13 +3,13 @@
 # Run from the project root (code/) directory on your development machine.
 #
 # Usage: bash scripts/deploy_teleop.sh [jetson_ip]
-#   Default IP: 192.168.56.101
+#   Default IP: 192.168.20.63
 
 set -e
 
-JETSON="${1:-192.168.56.101}"
-JETSON_USER="jetson"
-PROJECT_DIR="/home/jetson/robot_control"
+JETSON="${1:-192.168.20.63}"
+JETSON_USER="yu"
+PROJECT_DIR="/home/yu/robot_code"
 SSH="ssh -o StrictHostKeyChecking=no ${JETSON_USER}@${JETSON}"
 
 echo "=== Deploying to Jetson @ ${JETSON} ==="
@@ -20,13 +20,12 @@ if ! ${SSH} "echo OK" > /dev/null 2>&1; then
     exit 1
 fi
 
-# Deploy robot_control Python files
-echo "[1/3] Deploying Python modules..."
-scp robot_control/ur5_ik.py    "${JETSON_USER}@${JETSON}:${PROJECT_DIR}/robot_control/ur5_ik.py"
-scp robot_control/teleop.py    "${JETSON_USER}@${JETSON}:${PROJECT_DIR}/robot_control/teleop.py"
-scp robot_control/module_base.py "${JETSON_USER}@${JETSON}:${PROJECT_DIR}/robot_control/module_base.py"
-scp robot_control/robot.py     "${JETSON_USER}@${JETSON}:${PROJECT_DIR}/robot_control/robot.py"
-scp robot_control/arm.py       "${JETSON_USER}@${JETSON}:${PROJECT_DIR}/robot_control/arm.py"
+# Deploy backend Python files
+echo "[1/3] Deploying teleop backend..."
+scp teleoperation_sdk/teleop.py      "${JETSON_USER}@${JETSON}:${PROJECT_DIR}/teleoperation_sdk/teleop.py"
+scp teleoperation_sdk/xr_ur5e.py     "${JETSON_USER}@${JETSON}:${PROJECT_DIR}/teleoperation_sdk/xr_ur5e.py"
+scp teleoperation_sdk/vr_backends.py "${JETSON_USER}@${JETSON}:${PROJECT_DIR}/teleoperation_sdk/vr_backends.py"
+scp robot_control/web_gui/server.py  "${JETSON_USER}@${JETSON}:${PROJECT_DIR}/robot_control/web_gui/server.py"
 
 # Deploy Web GUI files
 echo "[2/3] Deploying Web GUI..."

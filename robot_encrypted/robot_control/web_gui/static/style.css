@@ -148,14 +148,17 @@ header h1 {
 /* ── dashboard ───────────────────────────────────────────────────────────── */
 .dashboard {
   display: grid;
-  grid-template-columns: 1fr var(--sidebar-w);
+  grid-template-columns: minmax(0, 1fr) minmax(0, var(--sidebar-w));
+  width: 100%;
+  max-width: 100%;
   min-height: calc(100vh - 110px);
 }
 
 .canvas {
+  min-width: 0;
   padding: var(--gap);
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
   grid-auto-rows: min-content;
   gap: var(--gap);
   align-content: start;
@@ -163,6 +166,7 @@ header h1 {
 
 /* ── sidebar ─────────────────────────────────────────────────────────────── */
 .sidebar {
+  min-width: 0;
   background: var(--surface);
   border-left: 1px solid var(--border);
   padding: var(--gap);
@@ -246,6 +250,7 @@ header h1 {
 
 /* ── panel ───────────────────────────────────────────────────────────────── */
 .panel {
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -312,6 +317,7 @@ header h1 {
 .panel-btn.panel-close:hover { color: var(--danger); }
 
 .panel-body {
+  min-width: 0;
   padding: 14px;
   display: flex;
   flex-direction: column;

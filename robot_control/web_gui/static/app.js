@@ -30,8 +30,10 @@ let ACTIVE_MODULES = [];
 // See fix: 2026-07-30, commit reference in git log.
 // ═══════════════════════════════════════════════════════════════════════════
 // Per-arm-panel dirty-joint tracking (panelId → Set of joint indices).
+// Joints in this Set are being edited in the browser. State broadcasts must
+// not overwrite their slider/number/value while the user is adjusting them.
 const _armDirtyJoints = new Map();
-const _UR5E_HOME_DEG = [0, -180, 135, -90, 0, 0];
+const _UR5E_HOME_DEG = [90, 0, 90, -90, 90, -135];
 const _UR5E_DH = [
   { a: 0, alpha: Math.PI / 2, d: 89.459 },
   { a: -425, alpha: 0, d: 0 },
@@ -1353,6 +1355,10 @@ function _renderArmPanel(panelId, body) {
         btn.addEventListener("pointerdown", (e) => {
           btn.setPointerCapture(e.pointerId);
           const delta = parseFloat(btn.dataset.d);
+          const jointIndex = Number(btn.dataset.j);
+          // Protect the joint while the arrow button is held; 10Hz arm_state
+          // would otherwise overwrite the value being manually adjusted.
+          _armDirtyJoints.get(panelId)?.add(jointIndex);
           const update = () => {
             const sl = el(panelId + `-arm-j${btn.dataset.j}`);
             if (sl) {
@@ -1369,6 +1375,8 @@ function _renderArmPanel(panelId, body) {
         });
         btn.addEventListener("pointercancel", () => {
           if (interval) { clearInterval(interval); interval = null; }
+          // No command was sent on cancel, so release dirty protection.
+          _armDirtyJoints.get(panelId)?.delete(Number(btn.dataset.j));
         });
       });
     });
@@ -2055,8 +2063,29 @@ function _initTeleopScene(panelId) {
   hand.camera.userData.orbitTarget.copy(hand.camera.userData.target);
   _bindTeleopSceneViewControls(panelId, "tl-hand", hand);
   hand.renderer.render(hand.scene, hand.camera);
-  window.__teleopScenes[panelId] = { hand };
+  window.__teleopScenes[panelId] = { hand, handCtrlAxes: defaultHand.ctrlAxes };
   window.__teleopScenes[panelId].hand.group = defaultHand.group;
+  _startTeleopRenderLoop(panelId);
+}
+
+function _startTeleopRenderLoop(panelId) {
+  if (typeof THREE === "undefined") return;
+  window.__teleopSceneRafs = window.__teleopSceneRafs || {};
+  if (window.__teleopSceneRafs[panelId]) return;
+  const loop = () => {
+    const cache = (window.__teleopScenes || {})[panelId];
+    if (!cache) return;
+    const s = window.__teleopLastState;
+    if (s && (s.controller_pose_3d || s.controller_pose || s.controller_pose_ur)
+        && cache.handCtrlAxes) {
+      const pose = s.controller_pose_3d || s.controller_pose || s.controller_pose_ur;
+      cache.handCtrlAxes.position.set(pose[0], pose[1], pose[2]);
+      cache.handCtrlAxes.quaternion.set(pose[3], pose[4], pose[5], pose[6]);
+    }
+    cache.hand.renderer.render(cache.hand.scene, cache.hand.camera);
+    window.__teleopSceneRafs[panelId] = requestAnimationFrame(loop);
+  };
+  window.__teleopSceneRafs[panelId] = requestAnimationFrame(loop);
 }
 
 function _makeTeleopScene(canvas, cameraPos, lookAt) {
@@ -2865,35 +2894,42 @@ function _rebuildUrdfSkeleton(cache, joints, targetJoints) {
   cache.modelZFrame.add(cache.targetFallbackGroup);
 }
 
-function _updateTeleopScene(panelId, s) {
+function _updateTeleopScene(panelId, s, updateStatus = true) {
   if (typeof THREE === "undefined") return;
   const cache = (window.__teleopScenes || {})[panelId];
   if (!cache) return;
 
   const handStatus = el(panelId + "-tl-hand-status");
-  if (handStatus && s.controller_position) {
+  if (updateStatus && handStatus && s.controller_position) {
     const p = s.controller_position;
     handStatus.textContent = `X ${fmt(p[0], 2)} Y ${fmt(p[1], 2)} Z ${fmt(p[2], 2)}`;
   }
 
-  // Independent hand scene: raw controller pose axes.
-  if (cache.hand.group) {
-    cache.hand.scene.remove(cache.hand.group);
-    cache.hand.group = null;
+  // Reuse the hand mesh and axes. Recreating the group on every state sample
+  // causes GC pauses and makes the 30 Hz pose updates look choppy.
+  let handGroup = cache.hand.group;
+  let ctrlAxes = cache.handCtrlAxes;
+  if (!handGroup || !ctrlAxes) {
+    if (handGroup) cache.hand.scene.remove(handGroup);
+    const handVisual = _createTeleopHandVisual();
+    handGroup = handVisual.group;
+    ctrlAxes = handVisual.ctrlAxes;
+    cache.hand.group = handGroup;
+    cache.handCtrlAxes = ctrlAxes;
+    cache.hand.scene.add(handGroup);
   }
-  const handVisual = _createTeleopHandVisual();
-  const handGroup = handVisual.group;
-  const ctrlAxes = handVisual.ctrlAxes;
-  if (s.controller_pose && s.controller_pose.length >= 7) {
+  const ctrlPose = (s.controller_pose_3d && s.controller_pose_3d.length >= 7)
+    ? s.controller_pose_3d
+    : (s.controller_pose && s.controller_pose.length >= 7)
+      ? s.controller_pose
+      : s.controller_pose_ur;
+  if (ctrlPose && ctrlPose.length >= 7) {
     ctrlAxes.position.set(
-      s.controller_pose[0], s.controller_pose[1], s.controller_pose[2]);
+      ctrlPose[0], ctrlPose[1], ctrlPose[2]);
     ctrlAxes.quaternion.set(
-      s.controller_pose[3], s.controller_pose[4],
-      s.controller_pose[5], s.controller_pose[6]);
+      ctrlPose[3], ctrlPose[4],
+      ctrlPose[5], ctrlPose[6]);
   }
-  cache.hand.group = handGroup;
-  cache.hand.scene.add(handGroup);
-  _renderTeleopScenes(panelId);
 }
 
 function _poseCell(label, xyz, rpy, color) {
@@ -2947,8 +2983,8 @@ function _renderTeleopPanel(panelId, body) {
       </div>
       <div style="margin-top:4px">
         <b>Grip:</b><span class="dot" id="${panelId}-tl-grip" style="font-size:14px">⚪</span>
-        <b>A:</b><span class="dot" id="${panelId}-tl-a" style="font-size:14px">⚪</span>
-        <b>B:</b><span class="dot" id="${panelId}-tl-b" style="font-size:14px">⚪</span>
+        <b>X:</b><span class="dot" id="${panelId}-tl-x" style="font-size:14px">⚪</span>
+        <b>Y:</b><span class="dot" id="${panelId}-tl-y" style="font-size:14px">⚪</span>
       </div>
     </div>
     <div id="${panelId}-tl-joints" style="font-size:11px;margin-bottom:8px"></div>
@@ -2957,6 +2993,14 @@ function _renderTeleopPanel(panelId, body) {
       <button class="btn-warn ctrl"    id="${panelId}-tl-disable">${t("teleop.disable")}</button>
       <button class="btn-secondary ctrl" id="${panelId}-tl-calibrate">${t("teleop.calibrate")}</button>
       <button class="btn-secondary ctrl" id="${panelId}-tl-log">${t("teleop.toggle_log")}</button>
+    </div>
+    <div class="btn-row" style="gap:4px;margin-top:6px">
+      <span style="font-size:12px;align-self:center">方向:</span>
+      <button class="btn-sm ctrl" data-tl-map="natural">自然</button>
+      <button class="btn-sm ctrl" data-tl-map="mirror_horizontal">左右/前后反</button>
+      <button class="btn-sm ctrl" data-tl-map="rotate_90">转90°</button>
+      <button class="btn-sm ctrl" data-tl-map="rotate_270">转270°</button>
+      <span id="${panelId}-tl-map-current" style="font-size:12px;align-self:center">natural</span>
     </div>
     <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px">
       <b>${t("teleop.gimbal_section")}</b>
@@ -3046,8 +3090,19 @@ function _renderTeleopPanel(panelId, body) {
   // Button events
   el(panelId + "-tl-enable")?.addEventListener("click",    () => socket.emit("teleop_enable"));
   el(panelId + "-tl-disable")?.addEventListener("click",   () => socket.emit("teleop_disable"));
-  el(panelId + "-tl-calibrate")?.addEventListener("click", () => socket.emit("teleop_calibrate"));
+  el(panelId + "-tl-calibrate")?.addEventListener("click", () => {
+    // Calibration should also put teleop into the active/connected state;
+    // otherwise users can calibrate repeatedly while arm control is idle.
+    socket.emit("teleop_enable");
+    socket.emit("teleop_calibrate");
+  });
   el(panelId + "-tl-log")?.addEventListener("click",       () => socket.emit("teleop_toggle_log"));
+  body.querySelectorAll("[data-tl-map]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      socket.emit("teleop_set_translation_mapping",
+                  { mode: btn.dataset.tlMap });
+    });
+  });
   el(panelId + "-tl-gimbal-enable")?.addEventListener("click",   () => socket.emit("teleop_gimbal_track_enable"));
   el(panelId + "-tl-gimbal-disable")?.addEventListener("click",  () => socket.emit("teleop_gimbal_track_disable"));
   el(panelId + "-tl-gimbal-calibrate")?.addEventListener("click", () => socket.emit("teleop_gimbal_calibrate"));
@@ -3074,6 +3129,7 @@ function _updateTeleopState(panelId, s) {
   _maybeSet(el(panelId + "-tl-active"), s.active ? I18n.t("teleop.active_yes") : I18n.t("teleop.active_no"));
   _maybeSet(el(panelId + "-tl-tracking"), s.tracking ? I18n.t("teleop.tracking_yes") : I18n.t("teleop.tracking_no"));
   _maybeSet(el(panelId + "-tl-calib"), s.calibrated ? I18n.t("teleop.calib_yes") : I18n.t("teleop.calib_no"));
+  _maybeSet(el(panelId + "-tl-map-current"), s.translation_mapping || "natural");
 
   const pos = s.controller_position;
   _maybeSet(el(panelId + "-tl-pos"), pos ? `X:${fmt(pos[0],1)} Y:${fmt(pos[1],1)} Z:${fmt(pos[2],1)}` : "—");
@@ -3085,8 +3141,8 @@ function _updateTeleopState(panelId, s) {
 
   const setDot = (e, active) => { if (e) e.textContent = active ? "🟢" : "⚪"; };
   setDot(el(panelId + "-tl-grip"), s.grip_pressed);
-  setDot(el(panelId + "-tl-a"), s.button_a);
-  setDot(el(panelId + "-tl-b"), s.button_b);
+  setDot(el(panelId + "-tl-x"), s.button_a);
+  setDot(el(panelId + "-tl-y"), s.button_b);
 
   const fb = el(panelId + "-tl-fault-badge");
   if (fb) { fb.style.display = s.is_fault ? "inline-block" : "none"; if (s.is_fault && s.fault_text) fb.title = s.fault_text; }
@@ -3152,6 +3208,103 @@ function _updateTeleopState(panelId, s) {
     }
   });
 }
+
+function _updateTeleopPose(panelId, s) {
+  if (!s || !s.controller_pose_ur) return;
+  const merged = Object.assign({}, window.__teleopLastState || {}, s);
+  window.__teleopLastState = merged;
+  _updateTeleopScene(panelId, merged, false);
+  _updateTeleopLiveText(panelId, merged);
+}
+
+function _updateTeleopLiveText(panelId, s) {
+  const pos = s.controller_position;
+  _maybeSet(el(panelId + "-tl-pos"),
+    pos ? `X:${fmt(pos[0],1)} Y:${fmt(pos[1],1)} Z:${fmt(pos[2],1)}` : "—");
+
+  const prog = el(panelId + "-tl-trigger");
+  const tval = el(panelId + "-tl-trigger-val");
+  if (prog) prog.value = Math.round((s.trigger_value || 0) * 100);
+  if (tval) tval.textContent = Math.round((s.trigger_value || 0) * 100) + "%";
+
+  const setDot = (e, active) => { if (e) e.textContent = active ? "🟢" : "⚪"; };
+  setDot(el(panelId + "-tl-grip"), s.grip_pressed);
+  setDot(el(panelId + "-tl-x"), s.button_a);
+  setDot(el(panelId + "-tl-y"), s.button_b);
+
+  if (s.target_joints_deg) {
+    s.target_joints_deg.forEach((a, i) =>
+      _maybeSet(el(panelId + `-tl-j${i}-tgt`), I18n.t("teleop.target") + fmt(a, 1) + "°"));
+  }
+  if (s.current_joints_deg) {
+    s.current_joints_deg.forEach((a, i) =>
+      _maybeSet(el(panelId + `-tl-j${i}-act`), I18n.t("teleop.actual") + fmt(a, 1) + "°"));
+  }
+}
+
+function _updateTeleopAck(panelId, patch) {
+  const merged = Object.assign({}, window.__teleopLastState || {}, patch);
+  window.__teleopLastState = merged;
+  _maybeSet(el(panelId + "-tl-active"),
+    merged.active ? I18n.t("teleop.active_yes") : I18n.t("teleop.active_no"));
+  _maybeSet(el(panelId + "-tl-calib"),
+    merged.calibrated ? I18n.t("teleop.calib_yes") : I18n.t("teleop.calib_no"));
+}
+
+socket.on("teleop_enable_result", (data) => {
+  if (!data) return;
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "teleop") return;
+    _updateTeleopAck(panelId, { active: !!data.active, calibrated: true });
+  });
+});
+
+socket.on("teleop_disable_result", (data) => {
+  if (!data) return;
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "teleop") return;
+    _updateTeleopAck(panelId, { active: !!data.active });
+  });
+});
+
+socket.on("teleop_calibrate_result", (data) => {
+  if (!data || !data.ok) return;
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "teleop") return;
+    _updateTeleopAck(panelId, {
+      calibrated: !!data.calibrated,
+      controller_position: data.controller_position,
+    });
+    const pos = data.controller_position;
+    if (pos) _maybeSet(el(panelId + "-tl-pos"),
+      `X:${fmt(pos[0],1)} Y:${fmt(pos[1],1)} Z:${fmt(pos[2],1)}`);
+  });
+});
+
+socket.on("teleop_mapping_result", (data) => {
+  if (!data) return;
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "teleop") return;
+    if (window.__teleopLastState) {
+      window.__teleopLastState.translation_mapping = data.mode;
+    }
+    _maybeSet(el(panelId + "-tl-map-current"), data.mode);
+    if (data.controller_pose_ur) {
+      _updateTeleopPose(panelId, {
+        controller_pose_3d: data.controller_pose_3d || data.controller_pose_ur,
+        controller_pose_ur: data.controller_pose_ur,
+      });
+    }
+  });
+});
+
+socket.on("teleop_pose", (data) => {
+  if (!data) return;
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "teleop") return;
+    _updateTeleopPose(panelId, data);
+  });
+});
 
 socket.on("teleop_video_log", (data) => {
   PanelManager._panels.forEach((p, panelId) => {
@@ -3363,7 +3516,9 @@ socket.on("robot_state", (s) => {
         PanelManager.updateStatus("lift", modState.connected, modState.is_fault);
         break;
       case "arm":
-        _updateArmState(panelId, modState);
+        // Arm panels are updated by the dedicated 10Hz arm_state event.
+        // Updating here with the 5Hz robot_state snapshot can overwrite newer
+        // arm data and cause displayed angles to jump backwards.
         PanelManager.updateStatus("arm", modState.connected, modState.is_fault);
         break;
       case "hand":
@@ -3404,7 +3559,9 @@ socket.on("robot_state", (s) => {
         PanelManager.updateStatus("demo", modState.active, false);
         break;
       case "teleop":
-        _updateTeleopState(panelId, modState);
+        // Teleop text is updated by the 30 Hz teleop_pose event.
+        // The 5 Hz robot_state snapshot can arrive after newer teleop data
+        // and cause position/trigger/grip/joint values to roll back.
         PanelManager.updateStatus("teleop", modState.connected, modState.is_fault);
         break;
       case "gimbal":
@@ -3423,6 +3580,17 @@ socket.on("robot_state", (s) => {
   });
 
   _maybeSet(el("last-update"), I18n.t("misc.last_update") + new Date().toLocaleTimeString());
+});
+
+socket.on("arm_state", (s) => {
+  // Dedicated 10Hz arm state. Keep this separate from robot_state so stale
+  // full-panel snapshots cannot race newer arm actual/target data.
+  if (!s) return;
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "arm") return;
+    _updateArmState(panelId, s);
+    PanelManager.updateStatus("arm", s.connected, s.is_fault);
+  });
 });
 
 function _updateUgvState(panelId, s) {
@@ -3532,9 +3700,10 @@ function _updateArmState(panelId, s) {
       // ⚠ _armDirtyJoints check protects both slider AND number input from
       // state-broadcast overwrite while user is editing. Without this, the
       // 5 Hz state loop reverts typed values before Execute can read them.
+      // The same protection must apply to the displayed target value.
       if (sl && !sl.matches(":active") && !(_armDirtyJoints.get(panelId) || new Set()).has(i)) sl.value = angle;
       if (num && !(_armDirtyJoints.get(panelId) || new Set()).has(i)) num.value = angle;
-      if (val) val.textContent = fmt(angle, 1) + "°";
+      if (val && !(_armDirtyJoints.get(panelId) || new Set()).has(i)) val.textContent = fmt(angle, 1) + "°";
     });
   }
 

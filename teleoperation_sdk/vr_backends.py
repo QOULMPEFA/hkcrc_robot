@@ -134,10 +134,16 @@ class XRBackend(VRBackend):
             return False
         try:
             # Map generic names to xrt function names
-            if name == "primaryButton":
-                return bool(self._xrt.get_A_button())
-            if name == "secondaryButton":
-                return bool(self._xrt.get_B_button())
+            if side == "left":
+                if name == "primaryButton":
+                    return bool(self._xrt.get_X_button())
+                if name == "secondaryButton":
+                    return bool(self._xrt.get_Y_button())
+            else:
+                if name == "primaryButton":
+                    return bool(self._xrt.get_A_button())
+                if name == "secondaryButton":
+                    return bool(self._xrt.get_B_button())
             # xrt may not expose other buttons — fallback False
             return False
         except Exception:

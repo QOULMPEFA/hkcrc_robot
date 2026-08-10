@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using System.Net;
 using Robot;
@@ -97,6 +98,28 @@ public class UIOperate : MonoBehaviour
         
         // set FPS to 90
         OVRPlugin.systemDisplayFrequency = 90.0f;
+    }
+
+    private IEnumerator Start()
+    {
+#if !UNITY_EDITOR
+        if (!Debug.isDebugBuild)
+            yield break;
+
+        // Debug APK test shortcut: connect to the production Jetson immediately
+        // and enable controller/head tracking send, bypassing the IP dialog.
+        yield return new WaitForSeconds(1.0f);
+        TcpHandler.Connect("192.168.20.63");
+        TargetIP.text = "PC Service: 192.168.20.63";
+        ReconnectBtn.gameObject.SetActive(true);
+        ConnectSuccess();
+        yield return new WaitForSeconds(0.5f);
+        HeadTog.isOn = true;
+        ControllerTog.isOn = true;
+        SendTog.isOn = true;
+        LogWindow.Info("AUTOTEST: connected to 192.168.20.63 and enabled tracking send");
+#endif
+        yield break;
     }
 
     private void OnSourceConfigOnOnInitialized()

@@ -47,7 +47,7 @@ class ArmState:
 
 
 class ArmController(RobotModule):
-    HOME_ANGLES_DEG = [0.0, -180.0, 135.0, -90.0, 0.0, 0.0]
+    HOME_ANGLES_DEG = [90.0, 0.0, 90.0, -90.0, 90.0, -135.0]
     MAX_SPEED_PCT = 20.0
     LOG_CAPACITY = 80
     RECONNECT_INTERVAL = 3.0

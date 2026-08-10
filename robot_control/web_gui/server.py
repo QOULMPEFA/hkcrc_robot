@@ -475,6 +475,40 @@ def _state_broadcast_loop():
         time.sleep(0.2)
 
 
+def _teleop_pose_broadcast_loop():
+    """Push only the teleop hand pose at 30 Hz to keep the 3D view smooth."""
+    interval = 1.0 / 30.0
+    while True:
+        try:
+            if robot:
+                teleop = robot.get("teleop")
+                if teleop is not None:
+                    socketio.emit("teleop_pose",
+                                  teleop.get_controller_pose_state())
+        except Exception as e:
+            log.warning("[GUI] Teleop pose broadcast error: %s", e)
+        time.sleep(interval)
+
+
+def _arm_state_broadcast_loop():
+    """Push arm actual-joint state at 10 Hz, matching UR secondary client.
+
+    Keep this separate from the 5 Hz robot_state broadcast. The arm panel
+    consumes only this event so a stale full-panel snapshot cannot overwrite
+    newer arm data and cause displayed angles to roll back.
+    """
+    interval = 1.0 / 10.0
+    while True:
+        try:
+            if robot:
+                arm = robot.get("arm")
+                if arm is not None:
+                    socketio.emit("arm_state", arm.get_state())
+        except Exception as e:
+            log.warning("[GUI] Arm state broadcast error: %s", e)
+        time.sleep(interval)
+
+
 # ── entry point ───────────────────────────────────────────────────────────────
 
 def main():
@@ -522,7 +556,7 @@ def main():
             "host": "192.168.56.101",
             "payload_mass": 0.5,
             "payload_cog": [0.0, 0.0, 0.05],
-            "home_angles_deg": [0.0, -180.0, 135.0, -90.0, 0.0, 0.0],
+            "home_angles_deg": [90.0, 0.0, 90.0, -90.0, 90.0, -135.0],
         },
         "ugv":    {"host": "127.0.0.1", "port": 9100},
         "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
@@ -533,30 +567,19 @@ def main():
         "teleop": {
             "host": "192.168.56.101",
             "arm_controller": "left",         # installed left arm; right reserved
-            "vr_backend": "xr_protocol",      # client_quest3 App over TCP | "xrt" (WiFi/OpenXR)
-            "vr_backend_kwargs": {"host": "0.0.0.0", "port": 63901},
-            "arm_speed_pct": 20.0,
-            "arm_delta_gain": 1.0,
-            "teleop_joint_range_deg": 60.0,
-            "hand_follow_enabled": False,     # disable grip-driven dexterous hand
-            "base_tilt_deg": 45.0,            # UR base mounted at 45° about Y
-            "base_tilt_sign": 1.0,            # set -1 if installed mirrored
-            "head_yaw_sign": -1,
-            "head_yaw_gain": 1.0,
-            "head_pitch_gain": 1.0,
-            "head_deadband": 0.3,
-            "head_smoothing": 0.25,
-            "head_rate_limit": 300.0,
-            "head_deadzone": 3.0,
-            "head_precision": 0.5,
-            "video_bridge": {
-                "script": "/home/yu/robot_code/camera_sdk/start_realsense_quest.sh",
-                "log": "/tmp/realsense_bridge.log",
-                "control_port": 13579,
-                "udp_port": 10004,
-                "autostart": False,
-                "default_camera": "D455",
-            },
+            "vr_backend": "xrt",              # XRoboToolkit-PC-Service via xrobotoolkit_sdk
+            "vr_backend_kwargs": {},
+            "urdf_path": "teleoperation_sdk/XRoboToolkit-Teleop-Sample-Python/assets/universal_robots_ur5e/dual_ur5e.urdf",
+            "link_name": "left_tool0",
+            "joint_start": 7,
+            "joint_end": 13,
+            "scale_factor": 0.8,
+            "control_rate_hz": 60,
+            "servo_time": 0.017,
+            "lookahead_time": 0.1,
+            "servo_gain": 300.0,
+            "max_velocity": 0.5,
+            "max_acceleration": 1.0,
         },
         "gimbal": {},
     }
@@ -582,6 +605,10 @@ def main():
     _register_module_handlers(robot)
 
     threading.Thread(target=_state_broadcast_loop, daemon=True, name="state-broadcast").start()
+    threading.Thread(target=_teleop_pose_broadcast_loop, daemon=True,
+                     name="teleop-pose-broadcast").start()
+    threading.Thread(target=_arm_state_broadcast_loop, daemon=True,
+                     name="arm-state-broadcast").start()
     threading.Thread(target=_camera_watchdog,      daemon=True, name="camera-watchdog").start()
 
     loaded = robot.module_names

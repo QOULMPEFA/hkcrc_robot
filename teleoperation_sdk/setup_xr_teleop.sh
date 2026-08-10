@@ -12,17 +12,18 @@ set -e
 SDK_DIR="$HOME/teleoperation_sdk"
 REPO_PC_SERVICE="https://github.com/XR-Robotics/XRoboToolkit-PC-Service.git"
 REPO_PYBIND="https://github.com/XR-Robotics/XRoboToolkit-PC-Service-Pybind.git"
+REPO_TELEOP_SAMPLE="https://github.com/XR-Robotics/XRoboToolkit-Teleop-Sample-Python.git"
 
 echo "=== XR-Robotics Teleop SDK Setup for Jetson Orin (Quest 3) ==="
 echo ""
 
 # 1. Install build dependencies
-echo "[1/5] Installing build dependencies..."
+echo "[1/6] Installing build dependencies..."
 sudo apt update
-sudo apt install -y cmake build-essential git python3-dev
+sudo apt install -y cmake build-essential git python3-dev libboost-all-dev
 
 # 2. Clone repositories
-echo "[2/5] Cloning repositories into $SDK_DIR ..."
+echo "[2/6] Cloning repositories into $SDK_DIR ..."
 mkdir -p "$SDK_DIR"
 cd "$SDK_DIR"
 
@@ -39,7 +40,7 @@ else
 fi
 
 # 3. Build Python bindings (includes building PC Service SDK)
-echo "[3/5] Building Python bindings for ARM64..."
+echo "[3/6] Building Python bindings for ARM64..."
 cd "$SDK_DIR/XRoboToolkit-PC-Service-Pybind"
 
 if [ -f "setup_orin.sh" ]; then
@@ -51,12 +52,23 @@ else
 fi
 
 # 4. Install the Python package
-echo "[4/5] Installing xrobotoolkit_sdk..."
+echo "[4/6] Installing xrobotoolkit_sdk..."
 pip install -e . 2>/dev/null || python setup.py install
 
-# 5. Verify
-echo "[5/5] Verifying installation..."
+# 5. Clone the upstream UR5e teleop sample (URDF + reference algorithm)
+echo "[5/6] Cloning XRoboToolkit-Teleop-Sample-Python..."
+if [ ! -d "$SDK_DIR/XRoboToolkit-Teleop-Sample-Python" ]; then
+    git clone "$REPO_TELEOP_SAMPLE" "$SDK_DIR/XRoboToolkit-Teleop-Sample-Python"
+else
+    echo "  XRoboToolkit-Teleop-Sample-Python already exists — skipping clone"
+fi
+
+echo "[6/6] Installing teleop runtime dependencies..."
+sudo -H python3 -m pip install numpy meshcat placo ur_rtde
+
+# Verify
 python3 -c "import xrobotoolkit_sdk as xrt; print('xrobotoolkit_sdk OK — version:', getattr(xrt, '__version__', 'unknown'))"
+python3 -c "import placo, rtde_control, rtde_receive; print('teleop runtime OK')"
 
 echo ""
 echo "=== Setup complete ==="

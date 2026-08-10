@@ -8,7 +8,7 @@ using UnityEngine;
 /// </summary>
 public static class QuickBuildQuest
 {
-    public const string OutputPath = "D:/12_Projects/20260608_RobotSystem/code/teleoperation_sdk/output_apk/quest_verify.apk";
+    public const string OutputPath = "D:/12_Projects/20260608_RobotSystem/code/teleoperation_sdk/output_apk/quest_verify_autotest.apk";
 
     [MenuItem("Build/Quick Quest APK (single)")]
     public static void Build()
