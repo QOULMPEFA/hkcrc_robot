@@ -51,6 +51,10 @@ class VRBackend(abc.ABC):
         """Return [x, y, z, qx, qy, qz, qw] or None."""
 
     @abc.abstractmethod
+    def get_timestamp_ns(self) -> int:
+        """Return latest XR data timestamp in nanoseconds, or 0 if none."""
+
+    @abc.abstractmethod
     def is_connected(self) -> bool:
         """Return whether the data source is currently connected."""
 
@@ -161,6 +165,14 @@ class XRBackend(VRBackend):
             log.debug("[XRBackend] Head pose error: %s", e)
         return None
 
+    def get_timestamp_ns(self) -> int:
+        if not self._connected:
+            return 0
+        try:
+            return int(self._xrt.get_time_stamp_ns() or 0)
+        except Exception:
+            return 0
+
 
 # ── XRProtocolBackend (TCP via XRoboToolkit-Quest APK) ──────────────────────
 
@@ -223,6 +235,11 @@ class XRProtocolBackend(VRBackend):
         if self._receiver is None:
             return None
         return self._receiver.get_headset_pose()
+
+    def get_timestamp_ns(self) -> int:
+        if self._receiver is None:
+            return 0
+        return self._receiver.get_timestamp_ns()
 
     def set_command_callback(self, callback) -> None:
         """Register a callback for non-Tracking function messages from Quest.

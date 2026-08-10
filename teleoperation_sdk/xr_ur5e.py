@@ -273,7 +273,9 @@ class URRTDEAdapter:
         keeping the requested target equal to the current pose.
         """
         current = self.get_current_joint_positions()
-        self.rtde_c.moveJ(current)
+        result = self.rtde_c.moveJ(current)
+        if result is False:
+            raise RuntimeError("RTDE control script failed to start")
 
     def servo_joints(self, joint_positions: np.ndarray) -> None:
         t_start = self.rtde_c.initPeriod()
@@ -286,6 +288,10 @@ class URRTDEAdapter:
             self.servo_gain,
         )
         self.rtde_c.waitPeriod(t_start)
+
+    def set_speed_limits(self, max_velocity: float, max_acceleration: float) -> None:
+        self.max_velocity = float(max_velocity)
+        self.max_acceleration = float(max_acceleration)
 
     def stop(self) -> None:
         for method in ("servoStop", "stopScript"):
@@ -373,12 +379,16 @@ class XrUr5eController:
         self.servo_time = float(cfg.get("servo_time", DEFAULT_SERVO_TIME))
         self.lookahead_time = float(cfg.get("lookahead_time", DEFAULT_LOOKAHEAD_TIME))
         self.servo_gain = float(cfg.get("servo_gain", DEFAULT_SERVO_GAIN))
+        self.rotation_reference = str(cfg.get("rotation_reference", "controller"))
 
         self.ur: Optional[URRTDEAdapter] = None
         self.ik: Optional[PlacoUr5eIK] = None
 
         self.ref_controller_xyz: Optional[np.ndarray] = None
         self.ref_controller_quat: Optional[np.ndarray] = None
+        self.ref_controller_xyz_raw: Optional[np.ndarray] = None
+        self.ref_controller_quat_raw: Optional[np.ndarray] = None
+        self.ref_headset_quat_raw: Optional[np.ndarray] = None
         self.ref_ee_xyz: Optional[np.ndarray] = None
         self.ref_ee_quat: Optional[np.ndarray] = None
 
@@ -421,13 +431,29 @@ class XrUr5eController:
         self.tracking = False
         self.ref_controller_xyz = None
         self.ref_controller_quat = None
+        self.ref_controller_xyz_raw = None
+        self.ref_controller_quat_raw = None
+        self.ref_headset_quat_raw = None
         self.ref_ee_xyz = None
         self.ref_ee_quat = None
 
-    def set_reference_pose(self, xr_pose: List[float]) -> None:
+    def set_reference_pose(self, xr_pose: List[float],
+                           headset_pose: Optional[List[float]] = None) -> None:
         xyz, quat = self._pose_to_headset_world(xr_pose)
         self.ref_controller_xyz = xyz
         self.ref_controller_quat = quat
+        self.ref_controller_xyz_raw = np.asarray(xr_pose[:3], dtype=float)
+        self.ref_controller_quat_raw = np.asarray(
+            [xr_pose[6], xr_pose[3], xr_pose[4], xr_pose[5]], dtype=float)
+        if headset_pose is not None and len(headset_pose) >= 7:
+            self.ref_headset_quat_raw = np.asarray(
+                [headset_pose[6], headset_pose[3], headset_pose[4], headset_pose[5]],
+                dtype=float)
+        else:
+            self.ref_headset_quat_raw = None
+
+    def set_rotation_reference(self, mode: str) -> None:
+        self.rotation_reference = "head" if mode == "head" else "controller"
 
     def step(self, xr_pose: Optional[List[float]], grip: float) -> None:
         if self.ik is None or self.ur is None:
@@ -466,11 +492,20 @@ class XrUr5eController:
         if self.ur is not None:
             self.ur.servo_joints(self.target_q)
 
+    def set_speed_limits(self, max_velocity: float, max_acceleration: float) -> None:
+        self.max_velocity = float(max_velocity)
+        self.max_acceleration = float(max_acceleration)
+        if self.ur is not None:
+            self.ur.set_speed_limits(self.max_velocity, self.max_acceleration)
+
     def _deactivate(self) -> None:
         if self.ref_ee_xyz is not None and self.ik is not None:
             self.ik.hold_current_frame()
         self.ref_controller_xyz = None
         self.ref_controller_quat = None
+        self.ref_controller_xyz_raw = None
+        self.ref_controller_quat_raw = None
+        self.ref_headset_quat_raw = None
         self.ref_ee_xyz = None
         self.ref_ee_quat = None
         self.active = False
@@ -490,11 +525,31 @@ class XrUr5eController:
         if self.ref_controller_xyz is None:
             self.ref_controller_xyz = controller_xyz.copy()
             self.ref_controller_quat = controller_quat.copy()
+            if self.ref_controller_xyz_raw is None:
+                self.ref_controller_xyz_raw = np.asarray(xr_pose[:3], dtype=float)
+            if self.ref_controller_quat_raw is None:
+                self.ref_controller_quat_raw = np.asarray(
+                    [xr_pose[6], xr_pose[3], xr_pose[4], xr_pose[5]], dtype=float)
             delta_xyz = np.zeros(3)
             delta_rot = np.zeros(3)
         else:
             delta_xyz = (controller_xyz - self.ref_controller_xyz) * self.scale_factor
-            delta_rot = quat_diff_as_angle_axis(self.ref_controller_quat, controller_quat)
+            if (self.rotation_reference == "head" and
+                    self.ref_controller_quat_raw is not None and
+                    self.ref_headset_quat_raw is not None):
+                current_raw = np.asarray(
+                    [xr_pose[6], xr_pose[3], xr_pose[4], xr_pose[5]], dtype=float)
+                world_delta = quaternion_multiply(
+                    current_raw,
+                    quaternion_inverse(self.ref_controller_quat_raw))
+                head_inv = quaternion_inverse(self.ref_headset_quat_raw)
+                local_delta = quaternion_multiply(
+                    quaternion_multiply(head_inv, world_delta),
+                    self.ref_headset_quat_raw)
+                delta_rot = quaternion_to_angle_axis(local_delta)
+            else:
+                delta_rot = quat_diff_as_angle_axis(
+                    self.ref_controller_quat, controller_quat)
         return delta_xyz, delta_rot
 
     def get_state(self) -> Dict[str, Any]:

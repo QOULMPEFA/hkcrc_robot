@@ -580,6 +580,12 @@ def main():
             "servo_gain": 300.0,
             "max_velocity": 0.5,
             "max_acceleration": 1.0,
+            "hand_follow_enabled": True,
+            "hand_grip_speed_pct": 30.0,
+            "hand_grip_max_position": 0.85,
+            "hand_grip_max_force_n": 5.0,
+            "head_yaw_sign": -1.0,
+            "head_pitch_sign": 1.0,
         },
         "gimbal": {},
     }

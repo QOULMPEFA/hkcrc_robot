@@ -1393,6 +1393,9 @@ function _renderArmPanel(panelId, body) {
     slSpeed.addEventListener("input", () => {
       const lbl = el(panelId + "-lbl-arm-speed"); if (lbl) lbl.textContent = slSpeed.value;
     });
+    slSpeed.addEventListener("change", () => {
+      socket.emit("arm_set_speed", { speed_pct: parseInt(slSpeed.value) || 20 });
+    });
   }
 
   // Collision sensitivity slider
@@ -3001,6 +3004,8 @@ function _renderTeleopPanel(panelId, body) {
       <button class="btn-sm ctrl" data-tl-map="rotate_90">转90°</button>
       <button class="btn-sm ctrl" data-tl-map="rotate_270">转270°</button>
       <span id="${panelId}-tl-map-current" style="font-size:12px;align-self:center">natural</span>
+      <span style="font-size:12px;align-self:center;margin-left:10px">旋转参考:</span>
+      <button class="btn-sm ctrl" id="${panelId}-tl-rotation-ref">手柄参考</button>
     </div>
     <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px">
       <b>${t("teleop.gimbal_section")}</b>
@@ -3103,6 +3108,11 @@ function _renderTeleopPanel(panelId, body) {
                   { mode: btn.dataset.tlMap });
     });
   });
+  el(panelId + "-tl-rotation-ref")?.addEventListener("click", () => {
+    const cur = (window.__teleopLastState && window.__teleopLastState.rotation_reference) || "controller";
+    socket.emit("teleop_set_rotation_reference",
+                { mode: cur === "head" ? "controller" : "head" });
+  });
   el(panelId + "-tl-gimbal-enable")?.addEventListener("click",   () => socket.emit("teleop_gimbal_track_enable"));
   el(panelId + "-tl-gimbal-disable")?.addEventListener("click",  () => socket.emit("teleop_gimbal_track_disable"));
   el(panelId + "-tl-gimbal-calibrate")?.addEventListener("click", () => socket.emit("teleop_gimbal_calibrate"));
@@ -3130,6 +3140,7 @@ function _updateTeleopState(panelId, s) {
   _maybeSet(el(panelId + "-tl-tracking"), s.tracking ? I18n.t("teleop.tracking_yes") : I18n.t("teleop.tracking_no"));
   _maybeSet(el(panelId + "-tl-calib"), s.calibrated ? I18n.t("teleop.calib_yes") : I18n.t("teleop.calib_no"));
   _maybeSet(el(panelId + "-tl-map-current"), s.translation_mapping || "natural");
+  _updateTeleopRotationButton(panelId, s.rotation_reference);
 
   const pos = s.controller_position;
   _maybeSet(el(panelId + "-tl-pos"), pos ? `X:${fmt(pos[0],1)} Y:${fmt(pos[1],1)} Z:${fmt(pos[2],1)}` : "—");
@@ -3218,6 +3229,7 @@ function _updateTeleopPose(panelId, s) {
 }
 
 function _updateTeleopLiveText(panelId, s) {
+  _updateTeleopRotationButton(panelId, s.rotation_reference);
   const pos = s.controller_position;
   _maybeSet(el(panelId + "-tl-pos"),
     pos ? `X:${fmt(pos[0],1)} Y:${fmt(pos[1],1)} Z:${fmt(pos[2],1)}` : "—");
@@ -3240,6 +3252,35 @@ function _updateTeleopLiveText(panelId, s) {
     s.current_joints_deg.forEach((a, i) =>
       _maybeSet(el(panelId + `-tl-j${i}-act`), I18n.t("teleop.actual") + fmt(a, 1) + "°"));
   }
+
+  const gimbalAvail = s.gimbal_available;
+  _maybeSet(el(panelId + "-tl-gimbal-status"),
+    gimbalAvail ? I18n.t("teleop.active_yes") : I18n.t("teleop.gimbal_unavailable"));
+  _maybeSet(el(panelId + "-tl-gimbal-track"),
+    s.gimbal_tracking ? I18n.t("teleop.tracking_yes") : I18n.t("teleop.tracking_no"));
+  _maybeSet(el(panelId + "-tl-gimbal-calib"),
+    s.gimbal_calibrated ? I18n.t("teleop.calib_yes") : I18n.t("teleop.calib_no"));
+  _maybeSet(el(panelId + "-tl-head-yaw"), fmt(s.head_yaw_deg || 0, 1));
+  _maybeSet(el(panelId + "-tl-head-pitch"), fmt(s.head_pitch_deg || 0, 1));
+  if (s.gimbal_yaw_limits) {
+    _maybeSet(el(panelId + "-tl-yaw-limit-lo"), s.gimbal_yaw_limits[0]);
+    _maybeSet(el(panelId + "-tl-yaw-limit-hi"), s.gimbal_yaw_limits[1]);
+  }
+  if (s.gimbal_pitch_limits) {
+    _maybeSet(el(panelId + "-tl-pitch-limit-lo"), s.gimbal_pitch_limits[0]);
+    _maybeSet(el(panelId + "-tl-pitch-limit-hi"), s.gimbal_pitch_limits[1]);
+  }
+  const gimbalBtns = ["-tl-gimbal-enable", "-tl-gimbal-disable", "-tl-gimbal-calibrate", "-tl-gimbal-home"];
+  gimbalBtns.forEach(suffix => {
+    const b = el(panelId + suffix);
+    if (b) b.disabled = !gimbalAvail;
+  });
+}
+
+function _updateTeleopRotationButton(panelId, mode) {
+  const btn = el(panelId + "-tl-rotation-ref");
+  if (!btn) return;
+  btn.textContent = mode === "head" ? "头部参考" : "手柄参考";
 }
 
 function _updateTeleopAck(panelId, patch) {
@@ -3293,6 +3334,24 @@ socket.on("teleop_mapping_result", (data) => {
       _updateTeleopPose(panelId, {
         controller_pose_3d: data.controller_pose_3d || data.controller_pose_ur,
         controller_pose_ur: data.controller_pose_ur,
+      });
+    }
+  });
+});
+
+socket.on("teleop_rotation_result", (data) => {
+  if (!data) return;
+  PanelManager._panels.forEach((p, panelId) => {
+    if (p.module !== "teleop") return;
+    if (window.__teleopLastState) {
+      window.__teleopLastState.rotation_reference = data.mode;
+    }
+    _updateTeleopRotationButton(panelId, data.mode);
+    if (data.controller_pose_ur) {
+      _updateTeleopPose(panelId, {
+        controller_pose_3d: data.controller_pose_3d || data.controller_pose_ur,
+        controller_pose_ur: data.controller_pose_ur,
+        rotation_reference: data.mode,
       });
     }
   });

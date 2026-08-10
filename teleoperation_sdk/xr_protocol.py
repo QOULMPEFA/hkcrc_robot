@@ -73,6 +73,7 @@ class XRProtocolReceiver:
         self._controller_poses: Dict[str, List[float]] = {}
         self._controller_buttons: Dict[str, Dict[str, Any]] = {}
         self._last_update = 0.0
+        self._last_timestamp_ns = 0
         self._frame_count = 0
         self._connected = False
 
@@ -362,6 +363,7 @@ class XRProtocolReceiver:
         now = time.time()
         with self._lock:
             self._last_update = now
+            self._last_timestamp_ns = int(data.get("timeStampNs", 0) or 0)
             self._frame_count += 1
 
             # Head pose
@@ -411,6 +413,10 @@ class XRProtocolReceiver:
         """Return [x, y, z, qx, qy, qz, qw] or None."""
         with self._lock:
             return list(self._head_pose) if self._head_pose else None
+
+    def get_timestamp_ns(self) -> int:
+        with self._lock:
+            return int(self._last_timestamp_ns)
 
     def get_controller_pose(self, side: str) -> Optional[List[float]]:
         """Return [x, y, z, qx, qy, qz, qw] or None."""
