@@ -26,8 +26,13 @@ except ImportError:
     _LIBSTARK = None
     _SDK_AVAILABLE = False
 
-FINGER_NAMES = ["thumb", "index", "middle", "ring", "pinky", "wrist"]
-FINGER_DISPLAY = ["拇指", "食指", "中指", "无名指", "小指", "手腕"]
+FINGER_NAMES = ["thumb", "thumb_aux", "index", "middle", "ring", "pinky"]
+FINGER_DISPLAY = ["拇指", "拇指副", "食指", "中指", "无名指", "小指"]
+
+FIST_FINGERS = [0, 0, 1000, 1000, 1000, 1000]
+FIST_FINAL = [500, 500, 1000, 1000, 1000, 1000]
+CUP_FINAL = [0, 0, 1000, 1000, 1000, 1000]
+OPEN_POS = [0, 0, 0, 0, 0, 0]
 
 
 def _int_to_baudrate(value: int):
@@ -121,6 +126,8 @@ class HandController(RobotModule):
             "hand_open":        self._on_open,
             "hand_close":       self._on_close,
             "hand_pinch":       self._on_pinch,
+            "hand_grip":        self._on_grip,
+            "hand_cup":         self._on_cup,
             "hand_set_fingers": self._on_set_fingers,
         }
 
@@ -183,7 +190,13 @@ class HandController(RobotModule):
         self.set_all_fingers([0.0] * 6, speed_pct)
 
     def close(self, speed_pct: float = 50.0) -> None:
-        self.set_all_fingers([1.0] * 6, speed_pct)
+        self._submit_command(("grip", (speed_pct,)))
+
+    def grip(self, speed_pct: float = 50.0) -> None:
+        self._submit_command(("grip", (speed_pct,)))
+
+    def cup(self, speed_pct: float = 50.0) -> None:
+        self._submit_command(("cup", (speed_pct,)))
 
     def pinch(self, speed_pct: float = 50.0) -> None:
         self.set_all_fingers([1.0, 1.0, 0.0, 0.0, 0.0, 0.0], speed_pct)
@@ -230,6 +243,12 @@ class HandController(RobotModule):
 
     def _on_pinch(self, _data: dict = None, emit=None) -> None:
         self.pinch()
+
+    def _on_grip(self, _data: dict = None, emit=None) -> None:
+        self.grip()
+
+    def _on_cup(self, _data: dict = None, emit=None) -> None:
+        self.cup()
 
     def _on_set_fingers(self, data: dict, emit=None) -> None:
         self.set_all_fingers(
@@ -518,6 +537,40 @@ class HandController(RobotModule):
                     await self._client.set_finger_positions_and_speeds(
                         self._slave_id, targets, [speed] * 6)
                 # Update displayed positions immediately
+                with self._lock:
+                    self._finger_positions = [p / 1000.0 for p in targets]
+            elif cmd == "grip":
+                spd = args[0]
+                speed = max(0, min(1000, int(spd * 10)))
+                targets = list(FIST_FINGERS)
+                if self._protocol == "can":
+                    await self._client.set_finger_positions(
+                        self._slave_id, targets)
+                else:
+                    await self._client.set_finger_positions_and_speeds(
+                        self._slave_id, targets, [speed] * 6)
+                with self._lock:
+                    self._finger_positions = [p / 1000.0 for p in targets]
+                await asyncio.sleep(0.3)
+                targets = list(FIST_FINAL)
+                if self._protocol == "can":
+                    await self._client.set_finger_positions(
+                        self._slave_id, targets)
+                else:
+                    await self._client.set_finger_positions_and_speeds(
+                        self._slave_id, targets, [speed] * 6)
+                with self._lock:
+                    self._finger_positions = [p / 1000.0 for p in targets]
+            elif cmd == "cup":
+                spd = args[0]
+                speed = max(0, min(1000, int(spd * 10)))
+                targets = list(CUP_FINAL)
+                if self._protocol == "can":
+                    await self._client.set_finger_positions(
+                        self._slave_id, targets)
+                else:
+                    await self._client.set_finger_positions_and_speeds(
+                        self._slave_id, targets, [speed] * 6)
                 with self._lock:
                     self._finger_positions = [p / 1000.0 for p in targets]
 

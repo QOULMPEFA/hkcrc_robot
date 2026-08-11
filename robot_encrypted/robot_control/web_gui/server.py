@@ -573,6 +573,7 @@ def main():
             "link_name": "left_tool0",
             "joint_start": 7,
             "joint_end": 13,
+            "control_mode": "pose",
             "scale_factor": 0.8,
             "control_rate_hz": 60,
             "servo_time": 0.017,

@@ -48,7 +48,7 @@ class ArmState:
 
 class ArmController(RobotModule):
     HOME_ANGLES_DEG = [90.0, 0.0, 90.0, -90.0, 90.0, -135.0]
-    MAX_SPEED_PCT = 20.0
+    MAX_SPEED_PCT = 100.0
     LOG_CAPACITY = 80
     RECONNECT_INTERVAL = 3.0
     POLL_INTERVAL = 1.0
@@ -61,6 +61,7 @@ class ArmController(RobotModule):
         self._state_port = int(cfg.get("state_port", 30002))
         self._state = ArmState()
         self._lock = threading.RLock()
+        self._home_lock = threading.Lock()
         self._running = False
         self._dash_sock: Optional[socket.socket] = None
         self._ur_sock: Optional[socket.socket] = None
@@ -78,6 +79,11 @@ class ArmController(RobotModule):
         self._payload_cog = [float(x) for x in cfg.get("payload_cog", [0.0, 0.0, 0.05])]
         self._speed_pct = min(self.MAX_SPEED_PCT,
                               max(1.0, float(cfg.get("speed_pct", 20.0))))
+        self._simulate = bool(cfg.get("simulate", False))
+
+    @property
+    def simulate(self) -> bool:
+        return self._simulate
 
     # ── RobotModule metadata ───────────────────────────────────────────────
 
@@ -101,6 +107,7 @@ class ArmController(RobotModule):
             "speed_pct": self._speed_pct,
             "is_moving": False, "is_fault": False, "is_enabled": False,
             "connected": False,
+            "simulate": False,
             "robot_mode": "UNKNOWN", "safety_mode": "UNKNOWN", "fault_text": "",
             "collision_sensitivity": 0.3,
             "collision_warning": "",
@@ -118,6 +125,7 @@ class ArmController(RobotModule):
             "arm_stop": self._on_stop,
             "arm_set_speed": self._on_set_speed,
             "arm_set_collision_sensitivity": self._on_set_collision_sensitivity,
+            "arm_set_simulate": self._on_set_simulate,
         }
 
     # ── lifecycle ─────────────────────────────────────────────────────────
@@ -126,6 +134,11 @@ class ArmController(RobotModule):
         if self._running:
             return
         self._running = True
+        if self._simulate:
+            self._set_simulated_state()
+            log.info("[Arm] Simulation mode active")
+            self._add_log("info", "模拟机械臂已启用")
+            return
         self._thread = threading.Thread(target=self._connection_loop, daemon=True, name="arm-conn")
         self._thread.start()
         self._state_thread = threading.Thread(target=self._state_reader_loop, daemon=True, name="arm-state")
@@ -134,6 +147,11 @@ class ArmController(RobotModule):
         self._add_log("info", f"开始连接 {self._host}")
 
     def stop(self) -> None:
+        self._stop_hardware()
+        log.info("[Arm] Stopped")
+        self._add_log("info", "已断开")
+
+    def _stop_hardware(self) -> None:
         self._running = False
         with self._lock:
             self._state.connected = False
@@ -153,12 +171,65 @@ class ArmController(RobotModule):
             self._thread.join(timeout=5.0)
         if self._state_thread and self._state_thread.is_alive():
             self._state_thread.join(timeout=5.0)
-        log.info("[Arm] Stopped")
-        self._add_log("info", "已断开")
+
+    def _set_simulated_state(self) -> None:
+        home = list(self._home_angles)
+        with self._lock:
+            self._state.joint_angles_deg = list(home)
+            self._state.joint_actual_deg = list(home)
+            self._state.joint_currents_a = [0.0] * 6
+            self._state.joint_temps_c = [0.0] * 6
+            self._state.joint_voltages_v = [0.0] * 6
+            self._state.is_moving = False
+            self._state.is_fault = False
+            self._state.is_enabled = True
+            self._state.connected = True
+            self._state.robot_mode = "SIMULATION"
+            self._state.safety_mode = "SIMULATION"
+            self._state.fault_text = ""
+            self._state.collision_warning = ""
+
+    def set_simulate(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if enabled == self._simulate:
+            return
+        if enabled:
+            self._simulate = True
+            self._stop_hardware()
+            self._set_simulated_state()
+            log.info("[Arm] Simulation mode enabled")
+            self._add_log("info", "模拟机械臂已启用")
+        else:
+            self._simulate = False
+            self._stop_hardware()
+            self.start()
+            log.info("[Arm] Simulation mode disabled")
+            self._add_log("info", "模拟机械臂已关闭")
+
+    def apply_teleop_state(self, target_deg: List[float],
+                           current_deg: List[float]) -> None:
+        if not self._simulate:
+            return
+        with self._lock:
+            self._state.joint_angles_deg = list(target_deg)
+            self._state.joint_actual_deg = list(current_deg)
+            self._state.connected = True
+            self._state.is_enabled = True
+            self._state.is_fault = False
+            self._state.is_moving = any(
+                abs(float(t) - float(c)) > 0.05
+                for t, c in zip(target_deg, current_deg)
+            )
 
     # ── commands ───────────────────────────────────────────────────────────
 
     def enable(self) -> None:
+        if self._simulate:
+            with self._lock:
+                self._state.is_enabled = True
+            log.info("[Arm] Simulation enable")
+            self._add_log("info", "模拟使能")
+            return
         r1 = self._dashboard_cmd("power on")
         time.sleep(0.3)
         r2 = self._dashboard_cmd("brake release")
@@ -166,6 +237,12 @@ class ArmController(RobotModule):
         self._add_log("info", f"使能 — power on: {r1}, brake: {r2}")
 
     def disable(self) -> None:
+        if self._simulate:
+            with self._lock:
+                self._state.is_enabled = False
+            log.info("[Arm] Simulation disable")
+            self._add_log("info", "模拟断开动力")
+            return
         r = self._dashboard_cmd("power off")
         log.info("[Arm] disable() — power off: %s", r)
         with self._lock:
@@ -191,6 +268,15 @@ class ArmController(RobotModule):
         if not teleop and getattr(self, '_teleop_active', False):
             log.warning("[Arm] Teleop active — rejecting move_joints")
             return False
+        if self._simulate:
+            with self._lock:
+                self._state.joint_angles_deg = list(angles_deg)
+                self._state.joint_actual_deg = list(angles_deg)
+                self._state.is_moving = False
+            log.info("[Arm] Simulation move_joints(deg=%s, speed=%.0f%%)",
+                     [f"{a:.1f}" for a in angles_deg], speed_pct)
+            self._add_log("info", f"模拟关节移动 speed={speed_pct:.0f}%")
+            return True
         rads = [math.radians(a) for a in angles_deg]
         a_j, v_j, _, _ = self._speed_to_params(speed_pct)
         script = (
@@ -215,6 +301,12 @@ class ArmController(RobotModule):
         if getattr(self, '_teleop_active', False):
             log.warning("[Arm] Teleop active — rejecting move_cartesian")
             return False
+        if self._simulate:
+            with self._lock:
+                self._state.end_effector_xyz = [x, y, z]
+                self._state.is_moving = False
+            log.info("[Arm] Simulation move_cartesian(xyz=[%.1f,%.1f,%.1f])", x, y, z)
+            return True
         x_m, y_m, z_m = x / 1000.0, y / 1000.0, z / 1000.0
         _, _, a_c, v_c = self._speed_to_params(speed_pct)
         script = (
@@ -243,9 +335,22 @@ class ArmController(RobotModule):
         return True
 
     def go_home(self) -> bool:
-        return self.teleop_move_joints(list(self._home_angles), speed_pct=20.0)
+        if self._simulate:
+            return self._move_joints(list(self._home_angles), speed_pct=20.0, teleop=True)
+        self._dashboard_cmd("stop")
+        self._reopen_ur_socket()
+        self._send_urscript("halt")
+        time.sleep(0.2)
+        self._send_urscript("stopj(2.0)")
+        return self.move_joints(list(self._home_angles), speed_pct=20.0)
 
     def stop_motion(self) -> None:
+        if self._simulate:
+            with self._lock:
+                self._state.is_moving = False
+            log.info("[Arm] Simulation stop")
+            self._add_log("warn", "模拟急停")
+            return
         self._dashboard_cmd("stop")
         self._send_urscript("stopj(2.0)")
         with self._lock:
@@ -261,15 +366,53 @@ class ArmController(RobotModule):
         port 30001 (UR allows only one primary client). Manual move_* commands
         are already gated off while teleop is active via ``_teleop_active``.
         """
+        if self._simulate:
+            return True
         return self._send_urscript(script)
 
     def emergency_stop(self) -> None:
         self.stop_motion()
 
+    def prepare_for_rtde(self, close_socket: bool = True) -> None:
+        """Stop URScript/RTDE leftovers so a fresh RTDE control session can start."""
+        if self._simulate:
+            log.info("[Arm] Simulation prepare_for_rtde")
+            return
+        self._dashboard_cmd("stop")
+        self._reopen_ur_socket()
+        ok_halt = self._send_urscript("halt")
+        time.sleep(0.2)
+        ok_stopj = self._send_urscript("stopj(2.0)")
+        time.sleep(0.2)
+        if close_socket:
+            with self._lock:
+                if self._ur_sock:
+                    try:
+                        self._ur_sock.close()
+                    except OSError:
+                        pass
+                    self._ur_sock = None
+            time.sleep(0.5)
+            log.info("[Arm] prepare_for_rtde closed URScript socket")
+        log.info("[Arm] prepare_for_rtde halt=%s stopj=%s", ok_halt, ok_stopj)
+
     def reset_fault(self) -> None:
-        r = self._dashboard_cmd("unlock protective stop")
-        log.info("[Arm] reset_fault() — unlock: %s", r)
-        self._add_log("info", f"解除保护性停止 — {r}")
+        if self._simulate:
+            with self._lock:
+                self._state.is_fault = False
+                self._state.is_enabled = True
+                self._state.fault_text = ""
+            self._add_log("info", "模拟解除故障")
+            return
+        r0 = self._dashboard_cmd("close safety popup")
+        r1 = self._dashboard_cmd("unlock protective stop")
+        time.sleep(0.2)
+        r2 = self._dashboard_cmd("power on")
+        time.sleep(0.2)
+        r3 = self._dashboard_cmd("brake release")
+        log.info("[Arm] reset_fault() — close: %s, unlock: %s, power: %s, brake: %s",
+                 r0, r1, r2, r3)
+        self._add_log("info", f"解除故障 — unlock: {r1}, power: {r2}, brake: {r3}")
 
     # ── state ─────────────────────────────────────────────────────────────
 
@@ -290,6 +433,7 @@ class ArmController(RobotModule):
                 "is_fault": s.is_fault,
                 "is_enabled": s.is_enabled,
                 "connected": s.connected,
+                "simulate": self._simulate,
                 "robot_mode": s.robot_mode,
                 "safety_mode": s.safety_mode,
                 "fault_text": s.fault_text,
@@ -310,6 +454,8 @@ class ArmController(RobotModule):
 
     def _on_reset_fault(self, _data: dict = None, emit=None) -> None:
         self.reset_fault()
+        self.prepare_for_rtde()
+        self._reopen_ur_socket()
 
     def _on_move_joints(self, data: dict, emit=None) -> None:
         self.move_joints(
@@ -318,13 +464,38 @@ class ArmController(RobotModule):
         )
 
     def _on_home(self, _data: dict = None, emit=None) -> None:
-        teleop = self.robot.get("teleop") if self.robot else None
-        if teleop is not None:
-            try:
-                teleop._on_disable(emit=emit)
-            except Exception:
-                pass
-        self.go_home()
+        if not self._home_lock.acquire(blocking=False):
+            log.info("[Arm] Home already in progress")
+            return
+        try:
+            teleop = self.robot.get("teleop") if self.robot else None
+            if teleop is not None:
+                teleop._on_home(emit=emit)
+            else:
+                self.go_home()
+        finally:
+            self._home_lock.release()
+
+    def _reopen_ur_socket(self) -> None:
+        """Close and reopen the URScript socket to clear queued commands."""
+        if self._simulate:
+            return
+        with self._lock:
+            if self._ur_sock:
+                try:
+                    self._ur_sock.close()
+                except OSError:
+                    pass
+                self._ur_sock = None
+        time.sleep(0.3)
+        try:
+            sock = socket.create_connection((self._host, self._ur_port), timeout=3.0)
+            sock.settimeout(1.0)
+            with self._lock:
+                self._ur_sock = sock
+            log.info("[Arm] URScript socket reopened")
+        except OSError as e:
+            log.warning("[Arm] URScript reopen failed: %s", e)
 
     def _on_set_home(self, _data: dict = None, emit=None) -> None:
         self.set_home()
@@ -341,6 +512,10 @@ class ArmController(RobotModule):
         level = float(data.get("level", 0.3))
         self.set_collision_sensitivity(level)
 
+    def _on_set_simulate(self, data: dict = None, emit=None) -> None:
+        enabled = bool((data or {}).get("enabled", not self._simulate))
+        self.set_simulate(enabled)
+
     # ── collision detection ────────────────────────────────────────────────
 
     def set_collision_sensitivity(self, level: float) -> None:
@@ -349,6 +524,8 @@ class ArmController(RobotModule):
             self._state.collision_sensitivity = level
         self._collision_enabled = level > 0.01
         self._add_log("info", f"碰撞检测灵敏度: {level:.2f}")
+        if self._simulate:
+            return
         # Send URScript command to enable/disable hardware collision detection
         if self._collision_enabled:
             self._send_urscript("set_collision_detection(True)")
@@ -368,7 +545,7 @@ class ArmController(RobotModule):
 
     def _state_reader_loop(self):
         """Connect to port 30002 and parse RobotState sub-packages."""
-        while self._running:
+        while self._running and not self._simulate:
             sock = None
             try:
                 sock = socket.create_connection((self._host, self._state_port), timeout=3.0)
@@ -547,6 +724,8 @@ class ArmController(RobotModule):
         return (factor * 2.5, factor * 2.0, factor * 1.5, factor * 0.5)
 
     def _dashboard_cmd(self, cmd: str, timeout: float = 3.0) -> Optional[str]:
+        if self._simulate:
+            return "OK"
         sock = None
         try:
             sock = socket.create_connection((self._host, self._dash_port), timeout=timeout)
@@ -570,6 +749,8 @@ class ArmController(RobotModule):
                     pass
 
     def _send_urscript(self, script: str) -> bool:
+        if self._simulate:
+            return True
         with self._lock:
             sock = self._ur_sock
         if not sock:
@@ -585,7 +766,7 @@ class ArmController(RobotModule):
             return False
 
     def _connection_loop(self):
-        while self._running:
+        while self._running and not self._simulate:
             dash_sock = None
             ur_sock = None
             try:

@@ -7,7 +7,7 @@ now follows XRoboToolkit-Teleop-Sample-Python:
     or from the XRProtocolReceiver for local protocol testing.
   - The grip button is the dead-man switch.
   - Controller pose is converted with R_HEADSET_TO_WORLD.
-  - Placo solves IK for the selected UR5e link.
+  - DH numerical IK solves joints in the same base frame as the Web UI.
   - UR RTDE sends continuous servoj() targets.
 """
 
@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 import math
+import os
+import subprocess
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -42,6 +44,11 @@ HEAD_RATE_LIMIT = 300.0
 HEAD_DEADZONE = 3.0
 HEAD_PRECISION = 0.5
 
+VIDEO_BRIDGE_SCRIPT = "/home/yu/robot_code/camera_sdk/start_realsense_quest.sh"
+VIDEO_BRIDGE_LOG = "/tmp/realsense_bridge.log"
+VIDEO_CONTROL_PORT = 13579
+VIDEO_UDP_PORT = 10004
+
 
 def _quat_to_yaw_pitch(qx: float, qy: float, qz: float, qw: float) -> tuple:
     """Convert a quaternion (x,y,z,w) to head yaw/pitch in degrees."""
@@ -63,12 +70,12 @@ class TeleopModule(RobotModule):
         self._vr_backend_name = str(cfg.get("vr_backend", "xrt"))
         self._vr_backend_kwargs = dict(cfg.get("vr_backend_kwargs", {}) or {})
         self._controller_config = dict(cfg)
-        self._rotation_reference = str(
-            cfg.get("rotation_reference", "controller"))
         self._control_hz = float(cfg.get("control_rate_hz", CONTROL_HZ))
 
         self._lock = threading.RLock()
         self._servo_lock = threading.RLock()
+        self._home_lock = threading.Lock()
+        self._enable_lock = threading.Lock()
         self._vr_backend: Optional[VRBackend] = None
         self._controller: Optional[XrUr5eController] = None
         self._thread: Optional[threading.Thread] = None
@@ -86,7 +93,6 @@ class TeleopModule(RobotModule):
         self._ctrl_quat = [0.0, 0.0, 0.0, 1.0]
         self._calib_pos = [0.0, 0.0, 0.0]
         self._calib_rot = [0.0, 0.0, 0.0, 1.0]
-        self._calib_head_rot = [0.0, 0.0, 0.0, 1.0]
         self._trigger_val = 0.0
         self._grip_val = 0.0
         self._grip_pressed = False
@@ -106,6 +112,7 @@ class TeleopModule(RobotModule):
         self._hand_grip_max_force_n = float(cfg.get("hand_grip_max_force_n", 5.0))
         self._last_hand_cmd_time = 0.0
         self._last_hand_closure: Optional[float] = None
+        self._hand_closed = False
 
         # Head tracking -> gimbal
         self._head_to_gimbal_enabled = cfg.get("head_to_gimbal", False)
@@ -136,6 +143,25 @@ class TeleopModule(RobotModule):
         self._head_pose_available = False
         self._last_head_track = 0.0
 
+        # Quest video bridge (RealSense/camera MJPEG -> UDP)
+        vcfg = cfg.get("video_bridge", {}) or {}
+        self._video_script = vcfg.get("script", VIDEO_BRIDGE_SCRIPT)
+        self._video_log = vcfg.get("log", VIDEO_BRIDGE_LOG)
+        self._video_control_port = int(vcfg.get("control_port", VIDEO_CONTROL_PORT))
+        self._video_udp_port = int(vcfg.get("udp_port", VIDEO_UDP_PORT))
+        self._video_autostart = bool(vcfg.get("autostart", False))
+        self._video_default_camera = vcfg.get("default_camera", "D455")
+        self._video_lock = threading.Lock()
+        self._video_action_lock = threading.Lock()
+        self._video_cache = {
+            "running": False,
+            "pid": 0,
+            "client": "",
+            "source": "",
+            "error": "",
+        }
+        self._video_cache_at = 0.0
+
     # ── RobotModule metadata ───────────────────────────────────────────────
 
     @property
@@ -158,7 +184,6 @@ class TeleopModule(RobotModule):
             "controller_pose_3d": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
             "controller_pose_ur": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
             "translation_mapping": "natural",
-            "rotation_reference": "controller",
             "controller_ypr_deg": [0.0, 0.0, 0.0],
             "current_pose_xyz": [0.0, 0.0, 0.0],
             "current_pose_rpy_deg": [0.0, 0.0, 0.0],
@@ -201,6 +226,7 @@ class TeleopModule(RobotModule):
         }
 
     def get_state(self) -> Dict[str, Any]:
+        video = self._video_status()
         with self._lock:
             controller_state = self._controller.get_state() if self._controller else {}
             current_deg = controller_state.get("current_joints_deg", self._current_joints_deg)
@@ -219,7 +245,6 @@ class TeleopModule(RobotModule):
                 "controller_pose_3d": display_pose,
                 "controller_pose_ur": display_pose,
                 "translation_mapping": "natural",
-                "rotation_reference": self._rotation_reference,
                 "controller_ypr_deg": self._quat_to_ypr_deg(display_pose[3:7]),
                 "current_pose_xyz": current_pose[:3],
                 "current_pose_rpy_deg": current_pose[3:],
@@ -252,13 +277,13 @@ class TeleopModule(RobotModule):
                 "head_precision": self._head_precision,
                 "gimbal_yaw_limits": list(self._effective_yaw_limits()),
                 "gimbal_pitch_limits": list(self._effective_pitch_limits()),
-                "video_running": False,
-                "video_pid": 0,
-                "video_client": "",
-                "video_source": "",
-                "video_control_port": 13579,
-                "video_udp_port": 10004,
-                "video_error": "",
+                "video_running": video["running"],
+                "video_pid": video["pid"],
+                "video_client": video["client"],
+                "video_source": video.get("source", ""),
+                "video_control_port": self._video_control_port,
+                "video_udp_port": self._video_udp_port,
+                "video_error": video["error"],
             }
 
     def get_controller_pose_state(self) -> Dict[str, Any]:
@@ -272,7 +297,6 @@ class TeleopModule(RobotModule):
                 "controller_pose_3d": display_pose,
                 "controller_pose_ur": display_pose,
                 "translation_mapping": "natural",
-                "rotation_reference": self._rotation_reference,
                 "trigger_value": self._trigger_val,
                 "grip_pressed": self._grip_pressed,
                 "button_a": self._button_a,
@@ -304,9 +328,8 @@ class TeleopModule(RobotModule):
         return {
             "teleop_enable": self._on_enable,
             "teleop_disable": self._on_disable,
+            "teleop_home": self._on_home,
             "teleop_calibrate": self._on_calibrate,
-            "teleop_set_translation_mapping": self._on_set_translation_mapping,
-            "teleop_set_rotation_reference": self._on_set_rotation_reference,
             "teleop_toggle_log": self._on_toggle_log,
             "teleop_gimbal_track_enable": self._on_gimbal_track_enable,
             "teleop_gimbal_track_disable": self._on_gimbal_track_disable,
@@ -315,15 +338,18 @@ class TeleopModule(RobotModule):
             "teleop_set_head_gains": self._on_set_head_gains,
             "teleop_set_gimbal_limits": self._on_set_gimbal_limits,
             "teleop_set_head_config": self._on_set_head_config,
-            "teleop_video_start": self._on_video_removed,
-            "teleop_video_stop": self._on_video_removed,
-            "teleop_video_restart": self._on_video_removed,
-            "teleop_video_log": self._on_video_removed,
+            "teleop_video_start": self._on_video_start,
+            "teleop_video_stop": self._on_video_stop,
+            "teleop_video_restart": self._on_video_restart,
+            "teleop_video_log": self._on_video_log,
         }
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
     def start(self) -> None:
+        if self._video_autostart:
+            self._on_video_start()
+
         backend = create_vr_backend(self._vr_backend_name, **self._vr_backend_kwargs)
         if backend is None:
             log.warning("[Teleop] Unknown VR backend %r", self._vr_backend_name)
@@ -376,14 +402,44 @@ class TeleopModule(RobotModule):
     # ── SocketIO handlers ──────────────────────────────────────────────────
 
     def _on_enable(self, _data: dict = None, emit=None) -> None:
+        if not self._enable_lock.acquire(blocking=False):
+            log.info("[Teleop] Enable already in progress")
+            if emit:
+                emit("teleop_enable_result", {"ok": True, "active": self._active})
+            return
+        try:
+            self._enable_inner(emit=emit)
+        finally:
+            self._enable_lock.release()
+
+    def _enable_inner(self, emit=None) -> None:
         if not self._xr_initialized or self._vr_backend is None:
             if emit:
                 emit("error", {"msg": "XR backend not initialized"})
             return
         if self._is_fault:
-            if emit:
-                emit("error", {"msg": "Teleop in fault state"})
-            return
+            arm = self._get_arm()
+            if arm is not None:
+                try:
+                    arm_state = arm.get_state()
+                    if not arm_state.get("is_fault"):
+                        with self._lock:
+                            self._is_fault = False
+                            self._fault_text = ""
+                    else:
+                        arm.reset_fault()
+                        time.sleep(0.5)
+                        arm_state = arm.get_state()
+                        if not arm_state.get("is_fault"):
+                            with self._lock:
+                                self._is_fault = False
+                                self._fault_text = ""
+                except Exception as e:
+                    log.warning("[Teleop] Fault check failed: %s", e)
+            if self._is_fault:
+                if emit:
+                    emit("error", {"msg": "Teleop in fault state"})
+                return
         if not self._calibrated:
             self._on_calibrate(emit=emit)
             if not self._calibrated:
@@ -395,58 +451,104 @@ class TeleopModule(RobotModule):
             return
 
         arm = self._get_arm()
+        simulate = False
         if arm is not None:
             try:
-                arm.stop_motion()
+                arm_state = arm.get_state()
+                simulate = bool(arm_state.get("simulate", False))
+                if arm_state.get("is_fault"):
+                    arm.reset_fault()
+                    time.sleep(0.5)
+                arm_state = arm.get_state()
+                if arm_state.get("is_fault"):
+                    if emit:
+                        emit("error", {"msg": "机械臂仍处于故障状态，请先解除故障"})
+                    return
+                if not simulate:
+                    arm.prepare_for_rtde()
+            except Exception as e:
+                log.warning("[Teleop] Arm prepare for RTDE failed: %s", e)
+
+        controller_config = dict(self._controller_config)
+        speed_pct = float(controller_config.get("arm_speed_pct", 20.0))
+        if arm is not None:
+            try:
+                arm_state = arm.get_state()
+                speed_pct = float(arm_state.get("speed_pct", speed_pct))
             except Exception:
                 pass
+        self._teleop_max_velocity_base = float(
+            controller_config.get("max_velocity", 0.5))
+        self._teleop_max_acceleration_base = float(
+            controller_config.get("max_acceleration", 1.0))
+        factor = max(0.01, min(1.0, speed_pct / 100.0))
+        controller_config["max_velocity"] = (
+            self._teleop_max_velocity_base * factor)
+        controller_config["max_acceleration"] = (
+            self._teleop_max_acceleration_base * factor)
+        controller_config["simulate"] = bool(
+            controller_config.get("simulate", False) or simulate)
 
-        try:
-            controller_config = dict(self._controller_config)
-            speed_pct = float(controller_config.get("arm_speed_pct", 20.0))
+        last_error = None
+        for attempt in range(3):
+            try:
+                self._controller = XrUr5eController(controller_config)
+                self._controller.connect()
+                break
+            except Exception as e:
+                failed_controller = self._controller
+                self._controller = None
+                if failed_controller is not None:
+                    try:
+                        failed_controller.stop()
+                    except Exception:
+                        pass
+                last_error = e
+                log.warning("[Teleop] Enable attempt %d failed: %s", attempt + 1, e)
+                if attempt < 2:
+                    if arm is not None:
+                        try:
+                            if not simulate:
+                                arm.prepare_for_rtde()
+                        except Exception:
+                            pass
+                    time.sleep(1.0)
+        else:
+            log.error("[Teleop] Enable failed after retries: %s", last_error)
             if arm is not None:
                 try:
-                    arm_state = arm.get_state()
-                    speed_pct = float(arm_state.get("speed_pct", speed_pct))
+                    arm._reopen_ur_socket()
                 except Exception:
                     pass
-            self._teleop_max_velocity_base = float(
-                controller_config.get("max_velocity", 0.5))
-            self._teleop_max_acceleration_base = float(
-                controller_config.get("max_acceleration", 1.0))
-            factor = max(0.01, min(1.0, speed_pct / 100.0))
-            controller_config["max_velocity"] = (
-                self._teleop_max_velocity_base * factor)
-            controller_config["max_acceleration"] = (
-                self._teleop_max_acceleration_base * factor)
-            controller_config["rotation_reference"] = self._rotation_reference
-            self._controller = XrUr5eController(controller_config)
-            self._controller.connect()
-        except Exception as e:
-            self._controller = None
-            log.exception("[Teleop] Enable failed")
             if emit:
-                emit("error", {"msg": f"Teleop enable failed: {e}"})
+                emit("error", {"msg": f"Teleop enable failed: {last_error}"})
             return
 
         self._gating(True)
         with self._lock:
             self._active = True
             self._tracking = False
+        hand = self._get_hand()
+        if hand is not None:
+            try:
+                hand.enable()
+            except Exception:
+                pass
         log.info("[Teleop] Enabled")
         if emit:
             emit("teleop_enable_result", {"ok": True, "active": True})
 
     def _on_disable(self, _data: dict = None, emit=None) -> None:
-        self._disable_controller()
-        self._gating(False)
-        self._control_hand(0.0)
-        with self._lock:
-            self._active = False
-            self._tracking = False
-        log.info("[Teleop] Disabled")
-        if emit:
-            emit("teleop_disable_result", {"ok": True, "active": False})
+        with self._enable_lock:
+            self._disable_controller()
+            self._gating(False)
+            self._control_hand(0.0)
+            with self._lock:
+                self._active = False
+                self._tracking = False
+            log.info("[Teleop] Disabled")
+            if emit:
+                emit("teleop_disable_result", {"ok": True, "active": False})
 
     def _on_calibrate(self, _data: dict = None, emit=None) -> None:
         pose = self._vr_backend.get_controller_pose(self._arm_controller) if self._vr_backend else None
@@ -459,10 +561,6 @@ class TeleopModule(RobotModule):
         with self._lock:
             self._calib_pos = [float(v) for v in pose[:3]]
             self._calib_rot = [float(v) for v in pose[3:7]]
-            if headset_pose is not None and len(headset_pose) >= 7:
-                self._calib_head_rot = [float(v) for v in headset_pose[3:7]]
-            else:
-                self._calib_head_rot = [0.0, 0.0, 0.0, 1.0]
             self._calibrated = True
             self._ctrl_pos = list(self._calib_pos)
             self._ctrl_quat = list(self._calib_rot)
@@ -479,38 +577,78 @@ class TeleopModule(RobotModule):
                 "controller_position": list(self._calib_pos),
             })
 
-    def _on_set_translation_mapping(self, _data: dict = None, emit=None) -> None:
-        # The rewritten backend follows the upstream coordinate transform and
-        # intentionally has no live direction-mode hacks.
-        pose = self._controller_pose_to_world()
-        if emit:
-            emit("teleop_mapping_result", {
-                "ok": True,
-                "mode": "natural",
-                "controller_pose_3d": pose,
-                "controller_pose_ur": pose,
-            })
-
-    def _on_set_rotation_reference(self, data: dict = None, emit=None) -> None:
-        mode = (data or {}).get("mode", "controller")
-        if mode not in ("controller", "head"):
-            mode = "controller"
-        self._rotation_reference = mode
-        if self._controller is not None:
-            self._controller.set_rotation_reference(mode)
-        pose = self._controller_pose_to_world()
-        if emit:
-            emit("teleop_rotation_result", {
-                "ok": True,
-                "mode": mode,
-                "controller_pose_3d": pose,
-                "controller_pose_ur": pose,
-            })
-
     def _on_toggle_log(self, _data: dict = None, emit=None) -> None:
         with self._lock:
             self._data_log_enabled = not self._data_log_enabled
         log.info("[Teleop] Data logging toggled: %s", self._data_log_enabled)
+
+    def _on_home(self, _data: dict = None, emit=None) -> None:
+        if not self._home_lock.acquire(blocking=False):
+            log.info("[Teleop] Home already in progress")
+            return
+        if not self._enable_lock.acquire(blocking=False):
+            self._home_lock.release()
+            log.info("[Teleop] Enable in progress, skipping home")
+            return
+
+        try:
+            arm = self._get_arm()
+            home_angles = (
+                list(arm._home_angles)
+                if arm is not None else [90.0, 0.0, 90.0, -90.0, 90.0, -135.0]
+            )
+
+            with self._lock:
+                self._active = False
+                self._tracking = False
+            self._gating(False)
+            self._control_hand(0.0)
+
+            controller = self._controller
+            ok = False
+            if controller is not None and controller.ur is not None:
+                try:
+                    with self._servo_lock:
+                        ok = controller.go_home(home_angles)
+                except Exception as e:
+                    log.exception("[Teleop] RTDE home failed: %s", e)
+
+                if ok:
+                    log.info("[Teleop] Home completed via RTDE")
+                    try:
+                        self._disable_controller(stop_arm=False)
+                    except Exception as e:
+                        log.warning("[Teleop] RTDE home cleanup failed: %s", e)
+                else:
+                    log.warning("[Teleop] RTDE home failed; falling back to URScript")
+                    try:
+                        self._disable_controller(stop_arm=True)
+                    except Exception as e:
+                        log.warning("[Teleop] RTDE home fallback cleanup failed: %s", e)
+
+            if not ok:
+                if arm is not None:
+                    arm.go_home()
+                else:
+                    log.error("[Teleop] Cannot home without arm module")
+        except Exception as e:
+            log.exception("[Teleop] Home command failed: %s", e)
+        finally:
+            if self._controller is not None:
+                try:
+                    self._disable_controller(stop_arm=False)
+                except Exception as e:
+                    log.warning("[Teleop] Home cleanup failed: %s", e)
+            self._gating(False)
+            self._control_hand(0.0)
+            with self._lock:
+                self._active = False
+                self._tracking = False
+            self._home_lock.release()
+            self._enable_lock.release()
+            log.info("[Teleop] Home done, teleop disabled")
+            if emit:
+                emit("teleop_home_result", {"ok": True, "active": False})
 
     # ── gimbal head tracking handlers ──────────────────────────────────────
 
@@ -724,9 +862,158 @@ class TeleopModule(RobotModule):
             return tuple(gimbal.config.get("pitch_limits", [-50, 60]))
         return (-50, 60)
 
-    def _on_video_removed(self, _data: dict = None, emit=None) -> None:
+    # ── video bridge (camera -> Quest 3) ──────────────────────────────────
+
+    def _video_sh(self, action: str, arg: str = None,
+                  timeout: float = 15.0) -> tuple:
+        """Run the bridge control script. Returns (ok, combined_output)."""
+        if not os.path.isfile(self._video_script):
+            return False, f"bridge script not found: {self._video_script}"
+        cmd = ["bash", self._video_script, action]
+        if arg:
+            cmd.append(arg)
+        try:
+            p = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout,
+            )
+            return p.returncode == 0, (p.stdout + p.stderr).strip()
+        except subprocess.TimeoutExpired:
+            return False, f"'{action}' timed out after {timeout:.0f}s"
+        except Exception as e:
+            return False, str(e)
+
+    def _resolve_video_source(self, hint: str) -> str:
+        """Map a camera hint (id / serial / model) to a live source id."""
+        hint = (hint or "").strip() or self._video_default_camera
+        cam = self.robot.get("camera") if self.robot is not None else None
+        if cam is None:
+            log.warning("[Teleop] camera module unavailable — video source "
+                        "hint %r used verbatim", hint)
+            return hint
+        try:
+            sid = cam.resolve_source(hint)
+        except Exception as e:
+            log.warning("[Teleop] resolve_source(%r) failed: %s", hint, e)
+            sid = None
+        if not sid:
+            log.warning("[Teleop] no camera matches %r — falling back to cam0", hint)
+            return "cam0"
+        return sid
+
+    def _video_status(self, force: bool = False) -> Dict[str, Any]:
+        """Cached bridge status, refreshed only when the process state can change."""
+        now = time.time()
+        with self._video_lock:
+            if not force and (now - self._video_cache_at) < 2.0:
+                return dict(self._video_cache)
+
+        ok, out = self._video_sh("status", timeout=8.0)
+        lines = [ln.strip() for ln in out.strip().split("\n") if ln.strip()]
+        source = ""
+        rest = []
+        for ln in lines:
+            if ln.lower().startswith("source:"):
+                source = ln.split(":", 1)[1].strip()
+            else:
+                rest.append(ln)
+        running = ok and bool(rest) and "not running" not in " ".join(rest).lower()
+        pid = 0
+        if running:
+            head = rest[0].split()
+            if head and head[0].isdigit():
+                pid = int(head[0])
+
+        state = {
+            "running": running,
+            "pid": pid,
+            "client": self._video_last_client(),
+            "source": source,
+            "error": "" if ok else out,
+        }
+        with self._video_lock:
+            self._video_cache = state
+            self._video_cache_at = now
+        return dict(state)
+
+    def _video_last_client(self) -> str:
+        """Most recent Quest IP seen by the bridge, parsed from its log."""
+        try:
+            with open(self._video_log, "r", errors="replace") as f:
+                lines = f.readlines()[-60:]
+        except OSError:
+            return ""
+        for line in reversed(lines):
+            if "Quest" in line and "connected" in line.lower():
+                for tok in line.replace(",", " ").split():
+                    if tok.count(".") == 3 and tok.replace(".", "").isdigit():
+                        return tok
+        return ""
+
+    def _on_video_start(self, data: dict = None, emit=None) -> None:
+        """Ensure the bridge is streaming the requested camera.
+
+        Idempotent by design: if the bridge is already up, only the source file
+        changes so the headset keeps its TCP session.
+        """
+        hint = (data or {}).get("source") or self._video_default_camera
+        src = self._resolve_video_source(hint)
+
+        with self._video_action_lock:
+            was_running = self._video_status(force=True)["running"]
+            if was_running:
+                ok, out = self._video_sh("source", src)
+                action = "source"
+            else:
+                ok, out = self._video_sh("start", src)
+                action = "start"
+            st = self._video_status(force=True)
+
+        if not st["running"]:
+            detail = self._video_log_tail(12) or out
+            log.error("[Teleop] Video bridge failed to start: %s", detail)
+            if emit:
+                emit("error", {"msg": f"图传启动失败: {detail}"})
+            return
+        log.info("[Teleop] Video bridge %s → source=%s (pid=%s, ctrl=%d, udp=%d)",
+                 action, st["source"] or src, st["pid"],
+                 self._video_control_port, self._video_udp_port)
         if emit:
-            emit("error", {"msg": "Quest video bridge removed from teleop backend"})
+            emit("teleop_video_result", {
+                "action": action,
+                "ok": ok,
+                "source": st["source"] or src,
+                "msg": out,
+            })
+
+    def _on_video_stop(self, _data: dict = None, emit=None) -> None:
+        with self._video_action_lock:
+            ok, out = self._video_sh("stop")
+            self._video_status(force=True)
+        log.info("[Teleop] Video bridge stopped")
+        if emit:
+            emit("teleop_video_result", {
+                "action": "stop",
+                "ok": ok,
+                "msg": out,
+            })
+
+    def _on_video_restart(self, _data: dict = None, emit=None) -> None:
+        with self._video_action_lock:
+            self._video_sh("stop")
+            self._video_status(force=True)
+        self._on_video_start(
+            {"source": self._video_status(force=True)["source"]}, emit)
+
+    def _on_video_log(self, _data: dict = None, emit=None) -> None:
+        if emit:
+            emit("teleop_video_log", {"text": self._video_log_tail(40)})
+
+    def _video_log_tail(self, n: int = 40) -> str:
+        try:
+            with open(self._video_log, "r", errors="replace") as f:
+                return "".join(f.readlines()[-n:]).strip()
+        except OSError as e:
+            return f"(无法读取 {self._video_log}: {e})"
 
     # ── control loop ───────────────────────────────────────────────────────
 
@@ -777,6 +1064,14 @@ class TeleopModule(RobotModule):
                             self._target_joints_deg = c["target_joints_deg"]
                             self._current_joints_deg = c["current_joints_deg"]
                             self._tracking = c["tracking"]
+                    arm = self._get_arm()
+                    if (
+                        arm is not None
+                        and getattr(arm, "simulate", False)
+                        and c
+                    ):
+                        arm.apply_teleop_state(
+                            c["target_joints_deg"], c["current_joints_deg"])
                     time.sleep(interval)
                 else:
                     self._read_controller()
@@ -832,33 +1127,16 @@ class TeleopModule(RobotModule):
         if time.time() - self._last_hand_cmd_time < 0.1:
             return
 
-        closure = 0.0
-        if trigger > TRIGGER_DEADZONE:
-            closure = max(
-                0.0,
-                min(self._hand_grip_max_position,
-                    float(trigger) * self._hand_grip_max_position),
-            )
-
-            try:
-                hand_state = hand.get_state()
-                force_n = float(hand_state.get("grip_force_n", 0.0) or 0.0)
-                positions = hand_state.get("finger_positions", [0.0] * 6)
-                if force_n > self._hand_grip_max_force_n and positions:
-                    current = min(float(positions[0]), float(positions[1]))
-                    closure = max(0.0, min(closure, current - 0.05))
-            except Exception:
-                pass
-
-        if self._last_hand_closure is not None and \
-                abs(closure - self._last_hand_closure) < 0.02:
-            return
-
         self._last_hand_cmd_time = time.time()
-        self._last_hand_closure = closure
-        positions = [closure] * 5 + [0.0]
         try:
-            hand.set_all_fingers(positions, self._hand_grip_speed_pct)
+            if trigger > TRIGGER_DEADZONE:
+                if not self._hand_closed:
+                    hand.grip(self._hand_grip_speed_pct)
+                    self._hand_closed = True
+            else:
+                if self._hand_closed:
+                    hand.open(self._hand_grip_speed_pct)
+                    self._hand_closed = False
         except Exception as e:
             log.warning("[Teleop] Hand command failed: %s", e)
 
@@ -867,7 +1145,7 @@ class TeleopModule(RobotModule):
             return None
         return self.robot.get("hand")
 
-    def _disable_controller(self) -> None:
+    def _disable_controller(self, stop_arm: bool = True) -> None:
         controller = self._controller
         self._controller = None
         if controller is not None:
@@ -878,26 +1156,26 @@ class TeleopModule(RobotModule):
                     log.warning("[Teleop] Controller stop failed: %s", e)
         arm = self._get_arm()
         if arm is not None:
+            if stop_arm:
+                try:
+                    arm.stop_motion()
+                except Exception:
+                    pass
             try:
-                arm.stop_motion()
+                arm.prepare_for_rtde()
+            except Exception:
+                pass
+            try:
+                arm._reopen_ur_socket()
             except Exception:
                 pass
 
     def _on_xr_disconnect(self) -> None:
         log.warning("[Teleop] XR data stale -> stop teleop and go home")
-        self._disable_controller()
-        self._gating(False)
-        with self._lock:
-            self._active = False
-            self._tracking = False
-        arm = self._get_arm()
-        if arm is not None:
-            try:
-                arm.move_joints(
-                    list(arm._home_angles),
-                    speed_pct=float(getattr(arm, "_speed_pct", 20.0)))
-            except Exception as e:
-                log.warning("[Teleop] Home move after XR disconnect failed: %s", e)
+        try:
+            self._on_home(emit=None)
+        except Exception as e:
+            log.warning("[Teleop] Home after XR disconnect failed: %s", e)
 
     def _gating(self, active: bool) -> None:
         arm = self._get_arm()
@@ -924,13 +1202,7 @@ class TeleopModule(RobotModule):
         cur = [self._ctrl_quat[3], self._ctrl_quat[0],
                self._ctrl_quat[1], self._ctrl_quat[2]]
         world_rel = quaternion_multiply(cur, quaternion_inverse(cal))
-        if self._rotation_reference == "head":
-            head = [self._calib_head_rot[3], self._calib_head_rot[0],
-                    self._calib_head_rot[1], self._calib_head_rot[2]]
-            rel = quaternion_multiply(
-                quaternion_multiply(quaternion_inverse(head), world_rel), head)
-        else:
-            rel = world_rel
+        rel = world_rel
         return [
             float(self._ctrl_pos[0] - self._calib_pos[0]),
             float(self._ctrl_pos[1] - self._calib_pos[1]),

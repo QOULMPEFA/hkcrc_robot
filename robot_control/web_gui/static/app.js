@@ -575,7 +575,7 @@ const KeyBindingManager = {
     "arm.disable":     { type:"click", module:"arm", descKey:"arm.disable",
                          fn: ()=>socket.emit("arm_disable") },
     "arm.home":        { type:"click", module:"arm", descKey:"arm.home",
-                         fn: ()=>socket.emit("arm_home") },
+                         fn: ()=>socket.emit(ACTIVE_MODULES.includes("teleop") ? "teleop_home" : "arm_home") },
     "arm.set_home":    { type:"click", module:"arm", descKey:"arm.set_home",
                          fn: ()=>socket.emit("arm_set_home") },
     "arm.stop":        { type:"click", module:"arm", descKey:"arm.stop",
@@ -589,6 +589,10 @@ const KeyBindingManager = {
                          fn: ()=>socket.emit("hand_close") },
     "hand.pinch":      { type:"click", module:"hand", descKey:"hand.pinch",
                          fn: ()=>socket.emit("hand_pinch") },
+    "hand.grip":       { type:"click", module:"hand", descKey:"hand.grip",
+                         fn: ()=>socket.emit("hand_grip") },
+    "hand.cup":        { type:"click", module:"hand", descKey:"hand.cup",
+                         fn: ()=>socket.emit("hand_cup") },
     "hand.enable":     { type:"click", module:"hand", descKey:"hand.enable",
                          fn: ()=>socket.emit("hand_enable") },
     "hand.disable":    { type:"click", module:"hand", descKey:"hand.disable",
@@ -1243,6 +1247,7 @@ function _renderArmPanel(panelId, body) {
       <button class="btn-secondary ctrl" id="${panelId}-arm-set-home" data-bind-action="arm.set_home">${t("arm.set_home")}</button>
       <button class="btn-secondary ctrl" id="${panelId}-arm-stop" data-bind-action="arm.stop">${t("arm.stop")}</button>
       <button class="btn-warn ctrl"      id="${panelId}-arm-reset" data-bind-action="arm.reset">${t("arm.reset")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-arm-simulate">模拟机械臂</button>
     </div>
     <div class="arm-urdf-viz">
       <div class="arm-urdf-header">
@@ -1367,15 +1372,22 @@ function _renderArmPanel(panelId, body) {
             }
           };
           update();
-          interval = setInterval(update, 100);
+          _sendCurrentAngles();
+          interval = setInterval(() => { update(); _sendCurrentAngles(); }, 100);
         });
         btn.addEventListener("pointerup", () => {
           if (interval) { clearInterval(interval); interval = null; }
-          _sendCurrentAngles();
+          socket.emit("arm_stop");
+          _armDirtyJoints.get(panelId)?.delete(Number(btn.dataset.j));
         });
         btn.addEventListener("pointercancel", () => {
           if (interval) { clearInterval(interval); interval = null; }
-          // No command was sent on cancel, so release dirty protection.
+          socket.emit("arm_stop");
+          _armDirtyJoints.get(panelId)?.delete(Number(btn.dataset.j));
+        });
+        btn.addEventListener("pointerleave", () => {
+          if (interval) { clearInterval(interval); interval = null; }
+          socket.emit("arm_stop");
           _armDirtyJoints.get(panelId)?.delete(Number(btn.dataset.j));
         });
       });
@@ -1415,17 +1427,20 @@ function _renderArmPanel(panelId, body) {
   const btnEnable  = el(panelId + "-arm-enable");
   const btnDisable = el(panelId + "-arm-disable");
   const btnReset   = el(panelId + "-arm-reset");
+  const btnSimulate = el(panelId + "-arm-simulate");
 
   if (btnHome) {
-    btnHome.addEventListener("pointerdown", () => socket.emit("arm_home"));
-    btnHome.addEventListener("pointerup",   () => socket.emit("arm_stop"));
-    btnHome.addEventListener("pointerleave", () => socket.emit("arm_stop"));
+    btnHome.addEventListener("click", () => socket.emit(ACTIVE_MODULES.includes("teleop") ? "teleop_home" : "arm_home"));
   }
   if (btnSetHome) btnSetHome.addEventListener("click", () => socket.emit("arm_set_home"));
   if (btnStop)    btnStop.addEventListener("click",    () => socket.emit("arm_stop"));
   if (btnEnable)  btnEnable.addEventListener("click",  () => socket.emit("arm_enable"));
   if (btnDisable) btnDisable.addEventListener("click", () => socket.emit("arm_disable"));
   if (btnReset)   btnReset.addEventListener("click",   () => socket.emit("arm_reset_fault"));
+  if (btnSimulate) btnSimulate.addEventListener("click", () => {
+    const cur = (window.__lastArmStates || {})[panelId]?.simulate;
+    socket.emit("arm_set_simulate", { enabled: !cur });
+  });
 
   const btnLog = el(panelId + "-btn-toggle-arm-log");
   const logPanel = el(panelId + "-arm-log-panel");
@@ -1448,6 +1463,8 @@ function _renderHandPanel(panelId, body) {
     <div class="btn-row">
       <button class="btn-primary ctrl"   id="${panelId}-hand-open" data-bind-action="hand.open">${t("hand.open")}</button>
       <button class="btn-primary ctrl"   id="${panelId}-hand-close" data-bind-action="hand.close">${t("hand.close")}</button>
+      <button class="btn-primary ctrl"   id="${panelId}-hand-grip" data-bind-action="hand.grip">${t("hand.grip")}</button>
+      <button class="btn-secondary ctrl" id="${panelId}-hand-cup" data-bind-action="hand.cup">${t("hand.cup")}</button>
       <button class="btn-secondary ctrl" id="${panelId}-hand-pinch" data-bind-action="hand.pinch">${t("hand.pinch")}</button>
     </div>
   `;
@@ -1481,11 +1498,15 @@ function _renderHandPanel(panelId, body) {
 
   const btnOpen  = el(panelId + "-hand-open");
   const btnClose = el(panelId + "-hand-close");
+  const btnGrip  = el(panelId + "-hand-grip");
+  const btnCup   = el(panelId + "-hand-cup");
   const btnPinch = el(panelId + "-hand-pinch");
   const btnEnable  = el(panelId + "-hand-enable");
   const btnDisable = el(panelId + "-hand-disable");
   if (btnOpen)  btnOpen.addEventListener("click",  () => socket.emit("hand_open"));
   if (btnClose) btnClose.addEventListener("click", () => socket.emit("hand_close"));
+  if (btnGrip)  btnGrip.addEventListener("click",  () => socket.emit("hand_grip"));
+  if (btnCup)   btnCup.addEventListener("click",   () => socket.emit("hand_cup"));
   if (btnPinch) btnPinch.addEventListener("click", () => socket.emit("hand_pinch"));
   if (btnEnable)  btnEnable.addEventListener("click",  () => socket.emit("hand_enable"));
   if (btnDisable) btnDisable.addEventListener("click", () => socket.emit("hand_disable"));
@@ -2997,16 +3018,6 @@ function _renderTeleopPanel(panelId, body) {
       <button class="btn-secondary ctrl" id="${panelId}-tl-calibrate">${t("teleop.calibrate")}</button>
       <button class="btn-secondary ctrl" id="${panelId}-tl-log">${t("teleop.toggle_log")}</button>
     </div>
-    <div class="btn-row" style="gap:4px;margin-top:6px">
-      <span style="font-size:12px;align-self:center">方向:</span>
-      <button class="btn-sm ctrl" data-tl-map="natural">自然</button>
-      <button class="btn-sm ctrl" data-tl-map="mirror_horizontal">左右/前后反</button>
-      <button class="btn-sm ctrl" data-tl-map="rotate_90">转90°</button>
-      <button class="btn-sm ctrl" data-tl-map="rotate_270">转270°</button>
-      <span id="${panelId}-tl-map-current" style="font-size:12px;align-self:center">natural</span>
-      <span style="font-size:12px;align-self:center;margin-left:10px">旋转参考:</span>
-      <button class="btn-sm ctrl" id="${panelId}-tl-rotation-ref">手柄参考</button>
-    </div>
     <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px">
       <b>${t("teleop.gimbal_section")}</b>
     </div>
@@ -3102,17 +3113,6 @@ function _renderTeleopPanel(panelId, body) {
     socket.emit("teleop_calibrate");
   });
   el(panelId + "-tl-log")?.addEventListener("click",       () => socket.emit("teleop_toggle_log"));
-  body.querySelectorAll("[data-tl-map]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      socket.emit("teleop_set_translation_mapping",
-                  { mode: btn.dataset.tlMap });
-    });
-  });
-  el(panelId + "-tl-rotation-ref")?.addEventListener("click", () => {
-    const cur = (window.__teleopLastState && window.__teleopLastState.rotation_reference) || "controller";
-    socket.emit("teleop_set_rotation_reference",
-                { mode: cur === "head" ? "controller" : "head" });
-  });
   el(panelId + "-tl-gimbal-enable")?.addEventListener("click",   () => socket.emit("teleop_gimbal_track_enable"));
   el(panelId + "-tl-gimbal-disable")?.addEventListener("click",  () => socket.emit("teleop_gimbal_track_disable"));
   el(panelId + "-tl-gimbal-calibrate")?.addEventListener("click", () => socket.emit("teleop_gimbal_calibrate"));
@@ -3139,8 +3139,6 @@ function _updateTeleopState(panelId, s) {
   _maybeSet(el(panelId + "-tl-active"), s.active ? I18n.t("teleop.active_yes") : I18n.t("teleop.active_no"));
   _maybeSet(el(panelId + "-tl-tracking"), s.tracking ? I18n.t("teleop.tracking_yes") : I18n.t("teleop.tracking_no"));
   _maybeSet(el(panelId + "-tl-calib"), s.calibrated ? I18n.t("teleop.calib_yes") : I18n.t("teleop.calib_no"));
-  _maybeSet(el(panelId + "-tl-map-current"), s.translation_mapping || "natural");
-  _updateTeleopRotationButton(panelId, s.rotation_reference);
 
   const pos = s.controller_position;
   _maybeSet(el(panelId + "-tl-pos"), pos ? `X:${fmt(pos[0],1)} Y:${fmt(pos[1],1)} Z:${fmt(pos[2],1)}` : "—");
@@ -3229,7 +3227,6 @@ function _updateTeleopPose(panelId, s) {
 }
 
 function _updateTeleopLiveText(panelId, s) {
-  _updateTeleopRotationButton(panelId, s.rotation_reference);
   const pos = s.controller_position;
   _maybeSet(el(panelId + "-tl-pos"),
     pos ? `X:${fmt(pos[0],1)} Y:${fmt(pos[1],1)} Z:${fmt(pos[2],1)}` : "—");
@@ -3277,12 +3274,6 @@ function _updateTeleopLiveText(panelId, s) {
   });
 }
 
-function _updateTeleopRotationButton(panelId, mode) {
-  const btn = el(panelId + "-tl-rotation-ref");
-  if (!btn) return;
-  btn.textContent = mode === "head" ? "头部参考" : "手柄参考";
-}
-
 function _updateTeleopAck(panelId, patch) {
   const merged = Object.assign({}, window.__teleopLastState || {}, patch);
   window.__teleopLastState = merged;
@@ -3319,41 +3310,6 @@ socket.on("teleop_calibrate_result", (data) => {
     const pos = data.controller_position;
     if (pos) _maybeSet(el(panelId + "-tl-pos"),
       `X:${fmt(pos[0],1)} Y:${fmt(pos[1],1)} Z:${fmt(pos[2],1)}`);
-  });
-});
-
-socket.on("teleop_mapping_result", (data) => {
-  if (!data) return;
-  PanelManager._panels.forEach((p, panelId) => {
-    if (p.module !== "teleop") return;
-    if (window.__teleopLastState) {
-      window.__teleopLastState.translation_mapping = data.mode;
-    }
-    _maybeSet(el(panelId + "-tl-map-current"), data.mode);
-    if (data.controller_pose_ur) {
-      _updateTeleopPose(panelId, {
-        controller_pose_3d: data.controller_pose_3d || data.controller_pose_ur,
-        controller_pose_ur: data.controller_pose_ur,
-      });
-    }
-  });
-});
-
-socket.on("teleop_rotation_result", (data) => {
-  if (!data) return;
-  PanelManager._panels.forEach((p, panelId) => {
-    if (p.module !== "teleop") return;
-    if (window.__teleopLastState) {
-      window.__teleopLastState.rotation_reference = data.mode;
-    }
-    _updateTeleopRotationButton(panelId, data.mode);
-    if (data.controller_pose_ur) {
-      _updateTeleopPose(panelId, {
-        controller_pose_3d: data.controller_pose_3d || data.controller_pose_ur,
-        controller_pose_ur: data.controller_pose_ur,
-        rotation_reference: data.mode,
-      });
-    }
   });
 });
 
@@ -3714,10 +3670,16 @@ function _updateArmState(panelId, s) {
   window.__lastArmStates[panelId] = s;
   window.__lastArmState = s;
   _updateArmUrdfScene(panelId, s);
-  _maybeSet(el(panelId + "-arm-connected"), s.connected ? I18n.t("arm.connected") : I18n.t("arm.disconnected"));
+  const simBtn = el(panelId + "-arm-simulate");
+  if (simBtn) {
+    simBtn.textContent = s.simulate ? "退出模拟" : "模拟机械臂";
+    simBtn.classList.toggle("btn-warn", !!s.simulate);
+  }
+  _maybeSet(el(panelId + "-arm-connected"),
+    s.simulate ? "模拟" : (s.connected ? I18n.t("arm.connected") : I18n.t("arm.disconnected")));
   _maybeSet(el(panelId + "-arm-enabled"), s.is_enabled ? I18n.t("arm.enabled_yes") : I18n.t("arm.enabled_no"));
   _maybeSet(el(panelId + "-arm-moving"), s.is_moving ? I18n.t("arm.moving_yes") : I18n.t("arm.moving_no"));
-  _maybeSet(el(panelId + "-arm-robot-mode"), s.robot_mode || "—");
+  _maybeSet(el(panelId + "-arm-robot-mode"), s.simulate ? "SIMULATION" : (s.robot_mode || "—"));
   _maybeSet(el(panelId + "-arm-safety-mode"), s.safety_mode || "—");
   const smEl = el(panelId + "-arm-safety-mode");
   if (smEl) {

@@ -76,6 +76,8 @@ class ArmController(RobotModule):
         self._joints_initialized = False
         self._payload_mass = float(cfg.get("payload_mass", 0.5))
         self._payload_cog = [float(x) for x in cfg.get("payload_cog", [0.0, 0.0, 0.05])]
+        self._speed_pct = min(self.MAX_SPEED_PCT,
+                              max(1.0, float(cfg.get("speed_pct", 20.0))))
 
     # ── RobotModule metadata ───────────────────────────────────────────────
 
@@ -96,6 +98,7 @@ class ArmController(RobotModule):
             "joint_voltages_v": [0.0] * 6,
             "end_effector_xyz": [0.0, 0.0, 0.0],
             "home_angles_deg": list(self._home_angles),
+            "speed_pct": self._speed_pct,
             "is_moving": False, "is_fault": False, "is_enabled": False,
             "connected": False,
             "robot_mode": "UNKNOWN", "safety_mode": "UNKNOWN", "fault_text": "",
@@ -113,6 +116,7 @@ class ArmController(RobotModule):
             "arm_home": self._on_home,
             "arm_set_home": self._on_set_home,
             "arm_stop": self._on_stop,
+            "arm_set_speed": self._on_set_speed,
             "arm_set_collision_sensitivity": self._on_set_collision_sensitivity,
         }
 
@@ -239,7 +243,8 @@ class ArmController(RobotModule):
         return True
 
     def go_home(self) -> bool:
-        return self.teleop_move_joints(list(self._home_angles), speed_pct=20.0)
+        self._reopen_ur_socket()
+        return self.move_joints(list(self._home_angles), speed_pct=20.0)
 
     def stop_motion(self) -> None:
         self._dashboard_cmd("stop")
@@ -281,6 +286,7 @@ class ArmController(RobotModule):
                 "joint_voltages_v": list(s.joint_voltages_v),
                 "end_effector_xyz": list(s.end_effector_xyz),
                 "home_angles_deg": list(self._home_angles),
+                "speed_pct": self._speed_pct,
                 "is_moving": s.is_moving,
                 "is_fault": s.is_fault,
                 "is_enabled": s.is_enabled,
@@ -309,17 +315,46 @@ class ArmController(RobotModule):
     def _on_move_joints(self, data: dict, emit=None) -> None:
         self.move_joints(
             data.get("angles", [0.0] * 6),
-            float(data.get("speed_pct", 20.0)),
+            float(data.get("speed_pct", self._speed_pct)),
         )
 
     def _on_home(self, _data: dict = None, emit=None) -> None:
+        teleop = self.robot.get("teleop") if self.robot else None
+        if teleop is not None:
+            try:
+                teleop._on_disable(emit=emit)
+            except Exception:
+                pass
         self.go_home()
+
+    def _reopen_ur_socket(self) -> None:
+        """Close and reopen the URScript socket to clear queued commands."""
+        with self._lock:
+            if self._ur_sock:
+                try:
+                    self._ur_sock.close()
+                except OSError:
+                    pass
+                self._ur_sock = None
+        try:
+            sock = socket.create_connection((self._host, self._ur_port), timeout=3.0)
+            sock.settimeout(1.0)
+            with self._lock:
+                self._ur_sock = sock
+            log.info("[Arm] URScript socket reopened")
+        except OSError as e:
+            log.warning("[Arm] URScript reopen failed: %s", e)
 
     def _on_set_home(self, _data: dict = None, emit=None) -> None:
         self.set_home()
 
     def _on_stop(self, _data: dict = None, emit=None) -> None:
         self.stop_motion()
+
+    def _on_set_speed(self, data: dict = None, emit=None) -> None:
+        speed_pct = float((data or {}).get("speed_pct", self._speed_pct))
+        self._speed_pct = min(self.MAX_SPEED_PCT, max(1.0, speed_pct))
+        log.info("[Arm] Speed set to %.0f%%", self._speed_pct)
 
     def _on_set_collision_sensitivity(self, data: dict, emit=None) -> None:
         level = float(data.get("level", 0.3))

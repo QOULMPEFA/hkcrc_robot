@@ -1,30 +1,31 @@
 """XR-Robotics style UR5e teleoperation core.
 
-This module mirrors the algorithms from:
-  https://github.com/XR-Robotics/XRoboToolkit-Teleop-Sample-Python
-
-The controller pose is first transformed with the same headset-to-world
-rotation used by the upstream sample.  The end-effector target is expressed as
-a relative delta from the pose captured when the grip button becomes active.
-Placo is used for IK and UR RTDE sends the resulting joints with servoj().
+The controller pose is transformed into the same DH base frame used by the
+control panel's _ur5eFkFrames() skeleton.  The end-effector target is a
+relative delta from the pose captured when the grip button becomes active.
+DH numerical IK solves the target joints and UR RTDE sends servoj().
 """
 
 from __future__ import annotations
 
 import logging
 import math
-import os
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
 log = logging.getLogger(__name__)
 
+# Derived from the control panel DH skeleton.  The visible robot scene is:
+# DH base -> robotFrame -> baseFrame -> mirrorFrame -> modelAdjustFrame
+# (0,-45,90) -> modelFrame -> modelZFrame.  R is that composite inverse, so a
+# right/up/forward hand input becomes a right/up/forward robot 3D displacement.
 R_HEADSET_TO_WORLD = np.array(
     [
-        [0.0, 0.0, -1.0],
-        [-1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
+        [-0.7071067811865476, -0.7071067811865476, 0.0],
+        [0.0, 0.0, 1.0],
+        [-0.7071067811865476, 0.7071067811865476, 0.0],
     ]
 )
 
@@ -37,44 +38,6 @@ DEFAULT_SERVO_GAIN = 300.0
 DEFAULT_MAX_VELOCITY = 0.5
 DEFAULT_MAX_ACCELERATION = 1.0
 DEFAULT_CONTROL_RATE_HZ = 60.0
-
-DEFAULT_URDF_PATH = os.path.join(
-    os.path.dirname(__file__),
-    "XRoboToolkit-Teleop-Sample-Python",
-    "assets",
-    "universal_robots_ur5e",
-    "dual_ur5e.urdf",
-)
-
-
-def _resolve_urdf_path(cfg: Dict[str, Any]) -> str:
-    configured = cfg.get("urdf_path")
-    if configured and os.path.isfile(configured):
-        return str(configured)
-
-    candidates = [
-        configured,
-        os.path.join(
-            os.path.dirname(__file__),
-            "XRoboToolkit-Teleop-Sample-Python",
-            "assets",
-            "universal_robots_ur5e",
-            "dual_ur5e.urdf",
-        ),
-        os.path.join(
-            os.path.expanduser("~"),
-            "teleoperation_sdk",
-            "XRoboToolkit-Teleop-Sample-Python",
-            "assets",
-            "universal_robots_ur5e",
-            "dual_ur5e.urdf",
-        ),
-    ]
-    for candidate in candidates:
-        if candidate and os.path.isfile(candidate):
-            return str(candidate)
-    return str(configured or DEFAULT_URDF_PATH)
-
 
 def is_valid_quaternion(quat, tol: float = 1e-6) -> bool:
     if not isinstance(quat, (list, tuple, np.ndarray)) or len(quat) != 4:
@@ -273,13 +236,19 @@ class URRTDEAdapter:
         keeping the requested target equal to the current pose.
         """
         current = self.get_current_joint_positions()
-        result = self.rtde_c.moveJ(current)
-        if result is False:
-            raise RuntimeError("RTDE control script failed to start")
+        last_error = None
+        for attempt in range(3):
+            result = self.rtde_c.moveJ(current)
+            if result is not False:
+                return
+            last_error = RuntimeError("RTDE control script failed to start")
+            log.warning("[XR-UR5e] RTDE control script start attempt %d failed", attempt + 1)
+            time.sleep(0.2)
+        raise last_error or RuntimeError("RTDE control script failed to start")
 
     def servo_joints(self, joint_positions: np.ndarray) -> None:
         t_start = self.rtde_c.initPeriod()
-        self.rtde_c.servoJ(
+        result = self.rtde_c.servoJ(
             joint_positions,
             self.max_velocity,
             self.max_acceleration,
@@ -287,6 +256,19 @@ class URRTDEAdapter:
             self.lookahead_time,
             self.servo_gain,
         )
+        if result is False:
+            self.start_control_script()
+            t_start = self.rtde_c.initPeriod()
+            result = self.rtde_c.servoJ(
+                joint_positions,
+                self.max_velocity,
+                self.max_acceleration,
+                self.servo_time,
+                self.lookahead_time,
+                self.servo_gain,
+            )
+            if result is False:
+                raise RuntimeError("servoJ failed after RTDE restart")
         self.rtde_c.waitPeriod(t_start)
 
     def set_speed_limits(self, max_velocity: float, max_acceleration: float) -> None:
@@ -299,68 +281,69 @@ class URRTDEAdapter:
                 getattr(self.rtde_c, method)()
             except Exception:
                 log.debug("[XR-UR5e] RTDE %s failed during stop", method)
+        for rtde, name in ((self.rtde_c, "rtde_c"), (self.rtde_r, "rtde_r")):
+            try:
+                rtde.disconnect()
+            except Exception:
+                log.debug("[XR-UR5e] %s disconnect failed during stop", name)
 
 
-class PlacoUr5eIK:
-    """Placo IK for one arm in the upstream dual_ur5e.urdf model."""
+class SimulatedUR5eAdapter:
+    """In-memory UR adapter for teleop direction tests when the arm is off."""
+
+    HOME_ANGLES_DEG = [90.0, 0.0, 90.0, -90.0, 90.0, -135.0]
+    CONTROL_HZ = 60.0
 
     def __init__(
         self,
-        urdf_path: str,
-        link_name: str,
-        q_init: np.ndarray,
-        joint_start: int,
-        joint_end: int,
-        dt: float = DEFAULT_SERVO_TIME,
+        initial_q: Optional[np.ndarray] = None,
+        max_velocity: float = DEFAULT_MAX_VELOCITY,
+        max_acceleration: float = DEFAULT_MAX_ACCELERATION,
     ):
-        import placo
+        if (
+            initial_q is None
+            or len(initial_q) != 6
+            or not np.all(np.isfinite(initial_q))
+            or np.allclose(initial_q, 0.0)
+        ):
+            initial_q = np.deg2rad(self.HOME_ANGLES_DEG)
+        self.current_q = np.asarray(initial_q, dtype=float).copy()
+        self.max_velocity = float(max_velocity)
+        self.max_acceleration = float(max_acceleration)
+        self.rtde_c = _SimulatedRTDEC(self)
 
-        self.link_name = link_name
-        self.joint_start = int(joint_start)
-        self.joint_end = int(joint_end)
+    def get_current_joint_positions(self) -> np.ndarray:
+        return np.array(self.current_q, dtype=float)
 
-        self.placo_robot = placo.RobotWrapper(urdf_path)
-        self.solver = placo.KinematicsSolver(self.placo_robot)
-        self.solver.dt = dt
-        self.solver.mask_fbase(True)
-        self.solver.add_kinetic_energy_regularization_task(1e-6)
+    def start_control_script(self) -> None:
+        return None
 
-        self.placo_robot.state.q[self.joint_start:self.joint_end] = np.asarray(q_init, dtype=float)
-        self.placo_robot.update_kinematics()
+    def servo_joints(self, joint_positions: np.ndarray) -> None:
+        target = np.asarray(joint_positions, dtype=float)
+        step = max(0.001, self.max_velocity / self.CONTROL_HZ)
+        delta = np.clip(target - self.current_q, -step, step)
+        self.current_q += delta
+        if np.all(np.abs(target - self.current_q) <= step * 0.5):
+            self.current_q = target.copy()
 
-        self.frame_task = self.solver.add_frame_task(link_name, np.eye(4))
-        self.frame_task.configure(f"{link_name}_frame", "soft", 1.0)
-        manipulability = self.solver.add_manipulability_task(link_name, "both", 1.0)
-        manipulability.configure(f"{link_name}_manipulability", "soft", 5e-2)
+    def set_speed_limits(self, max_velocity: float, max_acceleration: float) -> None:
+        self.max_velocity = float(max_velocity)
+        self.max_acceleration = float(max_acceleration)
 
-    def update_current_joints(self, q: np.ndarray) -> None:
-        self.placo_robot.state.q[self.joint_start:self.joint_end] = np.asarray(q, dtype=float)
-        self.placo_robot.update_kinematics()
+    def stop(self) -> None:
+        return None
 
-    def get_link_pose(self, link_name: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray]:
-        name = link_name or self.link_name
-        t = self.placo_robot.get_T_world_frame(name)
-        xyz = np.asarray(t[:3, 3], dtype=float)
-        quat = quaternion_from_matrix(t[:3, :3])
-        return xyz, quat
 
-    def set_target_frame(self, frame: np.ndarray) -> None:
-        self.frame_task.T_world_frame = frame
+class _SimulatedRTDEC:
+    def __init__(self, adapter: SimulatedUR5eAdapter):
+        self.adapter = adapter
 
-    def hold_current_frame(self) -> None:
-        xyz, quat = self.get_link_pose()
-        frame = quaternion_matrix(quat)
-        frame[:3, 3] = xyz
-        self.set_target_frame(frame)
+    def servoStop(self) -> None:
+        return None
 
-    def solve(self, target_frame: np.ndarray) -> Optional[np.ndarray]:
-        self.set_target_frame(target_frame)
-        try:
-            self.solver.solve(True)
-        except RuntimeError as e:
-            log.warning("[XR-UR5e] Placo IK failed: %s", e)
-            return None
-        return np.asarray(self.placo_robot.state.q[self.joint_start:self.joint_end], dtype=float)
+    def moveJ(self, joint_positions: np.ndarray, **kwargs) -> bool:
+        self.adapter.current_q = np.asarray(joint_positions, dtype=float).copy()
+        return True
 
 
 class XrUr5eController:
@@ -369,26 +352,19 @@ class XrUr5eController:
     def __init__(self, config: Dict[str, Any]):
         cfg = config or {}
         self.robot_ip = str(cfg.get("host", "192.168.56.101"))
-        self.urdf_path = _resolve_urdf_path(cfg)
-        self.link_name = str(cfg.get("link_name", "left_tool0"))
-        self.joint_start = int(cfg.get("joint_start", 7))
-        self.joint_end = int(cfg.get("joint_end", 13))
         self.scale_factor = float(cfg.get("scale_factor", DEFAULT_SCALE_FACTOR))
         self.max_velocity = float(cfg.get("max_velocity", DEFAULT_MAX_VELOCITY))
         self.max_acceleration = float(cfg.get("max_acceleration", DEFAULT_MAX_ACCELERATION))
         self.servo_time = float(cfg.get("servo_time", DEFAULT_SERVO_TIME))
         self.lookahead_time = float(cfg.get("lookahead_time", DEFAULT_LOOKAHEAD_TIME))
         self.servo_gain = float(cfg.get("servo_gain", DEFAULT_SERVO_GAIN))
-        self.rotation_reference = str(cfg.get("rotation_reference", "controller"))
+        self.control_mode = str(cfg.get("control_mode", "pose"))
+        self.simulate = bool(cfg.get("simulate", False))
 
         self.ur: Optional[URRTDEAdapter] = None
-        self.ik: Optional[PlacoUr5eIK] = None
 
         self.ref_controller_xyz: Optional[np.ndarray] = None
         self.ref_controller_quat: Optional[np.ndarray] = None
-        self.ref_controller_xyz_raw: Optional[np.ndarray] = None
-        self.ref_controller_quat_raw: Optional[np.ndarray] = None
-        self.ref_headset_quat_raw: Optional[np.ndarray] = None
         self.ref_ee_xyz: Optional[np.ndarray] = None
         self.ref_ee_quat: Optional[np.ndarray] = None
 
@@ -398,26 +374,28 @@ class XrUr5eController:
         self.tracking = False
 
     def connect(self) -> None:
-        self.ur = URRTDEAdapter(
-            robot_ip=self.robot_ip,
-            max_velocity=self.max_velocity,
-            max_acceleration=self.max_acceleration,
-            servo_time=self.servo_time,
-            lookahead_time=self.lookahead_time,
-            servo_gain=self.servo_gain,
-        )
-        self.current_q = self.ur.get_current_joint_positions()
-        self.ur.start_control_script()
-        self.target_q = self.current_q.copy()
-        self.ik = PlacoUr5eIK(
-            urdf_path=self.urdf_path,
-            link_name=self.link_name,
-            q_init=self.current_q,
-            joint_start=self.joint_start,
-            joint_end=self.joint_end,
-            dt=self.servo_time,
-        )
-        self.ik.update_current_joints(self.current_q)
+        if self.simulate:
+            self.ur = SimulatedUR5eAdapter(
+                initial_q=self.current_q,
+                max_velocity=self.max_velocity,
+                max_acceleration=self.max_acceleration,
+            )
+        else:
+            self.ur = URRTDEAdapter(
+                robot_ip=self.robot_ip,
+                max_velocity=self.max_velocity,
+                max_acceleration=self.max_acceleration,
+                servo_time=self.servo_time,
+                lookahead_time=self.lookahead_time,
+                servo_gain=self.servo_gain,
+            )
+        try:
+            self.current_q = self.ur.get_current_joint_positions()
+            self.target_q = self.current_q.copy()
+            self.ur.start_control_script()
+        except Exception:
+            self.ur.stop()
+            raise
         log.info("[XR-UR5e] Teleop controller connected")
 
     def stop(self) -> None:
@@ -426,14 +404,10 @@ class XrUr5eController:
                 self.ur.stop()
             finally:
                 self.ur = None
-        self.ik = None
         self.active = False
         self.tracking = False
         self.ref_controller_xyz = None
         self.ref_controller_quat = None
-        self.ref_controller_xyz_raw = None
-        self.ref_controller_quat_raw = None
-        self.ref_headset_quat_raw = None
         self.ref_ee_xyz = None
         self.ref_ee_quat = None
 
@@ -442,21 +416,9 @@ class XrUr5eController:
         xyz, quat = self._pose_to_headset_world(xr_pose)
         self.ref_controller_xyz = xyz
         self.ref_controller_quat = quat
-        self.ref_controller_xyz_raw = np.asarray(xr_pose[:3], dtype=float)
-        self.ref_controller_quat_raw = np.asarray(
-            [xr_pose[6], xr_pose[3], xr_pose[4], xr_pose[5]], dtype=float)
-        if headset_pose is not None and len(headset_pose) >= 7:
-            self.ref_headset_quat_raw = np.asarray(
-                [headset_pose[6], headset_pose[3], headset_pose[4], headset_pose[5]],
-                dtype=float)
-        else:
-            self.ref_headset_quat_raw = None
-
-    def set_rotation_reference(self, mode: str) -> None:
-        self.rotation_reference = "head" if mode == "head" else "controller"
 
     def step(self, xr_pose: Optional[List[float]], grip: float) -> None:
-        if self.ik is None or self.ur is None:
+        if self.ur is None:
             return
 
         if xr_pose is None:
@@ -466,27 +428,38 @@ class XrUr5eController:
         active = float(grip) > (1.0 - CONTROLLER_DEADZONE)
         if active:
             if self.ref_ee_xyz is None:
-                self.ref_ee_xyz, self.ref_ee_quat = self.ik.get_link_pose()
+                from teleoperation_sdk.ur5_ik import ur5_fk
+                current_pose = np.asarray(ur5_fk(self.current_q), dtype=float)
+                self.ref_ee_xyz = current_pose[:3, 3]
+                self.ref_ee_quat = quaternion_from_matrix(current_pose[:3, :3])
 
             delta_xyz, delta_rot = self._process_xr_pose(xr_pose)
-            target_xyz, target_quat = apply_delta_pose(
-                self.ref_ee_xyz,
-                self.ref_ee_quat,
-                delta_xyz,
-                delta_rot,
-            )
+            delta_xyz = np.asarray(delta_xyz, dtype=float) * 1000.0
+            if self.control_mode == "position":
+                target_xyz = self.ref_ee_xyz + delta_xyz
+                target_quat = self.ref_ee_quat.copy()
+            else:
+                target_xyz, target_quat = apply_delta_pose(
+                    self.ref_ee_xyz,
+                    self.ref_ee_quat,
+                    delta_xyz,
+                    delta_rot,
+                )
             target_frame = quaternion_matrix(target_quat)
             target_frame[:3, 3] = target_xyz
-            q = self.ik.solve(target_frame)
+            from teleoperation_sdk.ur5_ik import ur5_ik
+            q = ur5_ik(
+                target_frame.tolist(),
+                seed_joints_rad=list(self.current_q),
+            )
             if q is not None:
-                self.target_q = q.copy()
+                self.target_q = np.asarray(q, dtype=float)
             self.active = True
             self.tracking = True
         else:
             self._deactivate()
 
         self.current_q = self.ur.get_current_joint_positions()
-        self.ik.update_current_joints(self.current_q)
 
     def send(self) -> None:
         if self.ur is not None:
@@ -498,14 +471,42 @@ class XrUr5eController:
         if self.ur is not None:
             self.ur.set_speed_limits(self.max_velocity, self.max_acceleration)
 
+    def go_home(self, angles_deg: List[float]) -> bool:
+        if self.ur is None:
+            return False
+
+        target_q = np.deg2rad(np.asarray(angles_deg, dtype=float))
+        self.ur.rtde_c.servoStop()
+        time.sleep(0.05)
+        result = self.ur.rtde_c.moveJ(
+            target_q,
+            speed=self.max_velocity,
+            acceleration=self.max_acceleration,
+        )
+        if not result:
+            log.warning("[XR-UR5e] moveJ home failed; restarting RTDE control script")
+            try:
+                self.ur.start_control_script()
+                result = self.ur.rtde_c.moveJ(
+                    target_q,
+                    speed=self.max_velocity,
+                    acceleration=self.max_acceleration,
+                )
+            except Exception as e:
+                log.error("[XR-UR5e] RTDE home restart failed: %s", e)
+                return False
+
+        if not result:
+            log.error("[XR-UR5e] moveJ home returned failure")
+            return False
+
+        self.target_q = target_q
+        self.current_q = self.ur.get_current_joint_positions()
+        return True
+
     def _deactivate(self) -> None:
-        if self.ref_ee_xyz is not None and self.ik is not None:
-            self.ik.hold_current_frame()
         self.ref_controller_xyz = None
         self.ref_controller_quat = None
-        self.ref_controller_xyz_raw = None
-        self.ref_controller_quat_raw = None
-        self.ref_headset_quat_raw = None
         self.ref_ee_xyz = None
         self.ref_ee_quat = None
         self.active = False
@@ -525,36 +526,18 @@ class XrUr5eController:
         if self.ref_controller_xyz is None:
             self.ref_controller_xyz = controller_xyz.copy()
             self.ref_controller_quat = controller_quat.copy()
-            if self.ref_controller_xyz_raw is None:
-                self.ref_controller_xyz_raw = np.asarray(xr_pose[:3], dtype=float)
-            if self.ref_controller_quat_raw is None:
-                self.ref_controller_quat_raw = np.asarray(
-                    [xr_pose[6], xr_pose[3], xr_pose[4], xr_pose[5]], dtype=float)
             delta_xyz = np.zeros(3)
             delta_rot = np.zeros(3)
         else:
             delta_xyz = (controller_xyz - self.ref_controller_xyz) * self.scale_factor
-            if (self.rotation_reference == "head" and
-                    self.ref_controller_quat_raw is not None and
-                    self.ref_headset_quat_raw is not None):
-                current_raw = np.asarray(
-                    [xr_pose[6], xr_pose[3], xr_pose[4], xr_pose[5]], dtype=float)
-                world_delta = quaternion_multiply(
-                    current_raw,
-                    quaternion_inverse(self.ref_controller_quat_raw))
-                head_inv = quaternion_inverse(self.ref_headset_quat_raw)
-                local_delta = quaternion_multiply(
-                    quaternion_multiply(head_inv, world_delta),
-                    self.ref_headset_quat_raw)
-                delta_rot = quaternion_to_angle_axis(local_delta)
-            else:
-                delta_rot = quat_diff_as_angle_axis(
-                    self.ref_controller_quat, controller_quat)
+            delta_rot = quat_diff_as_angle_axis(
+                self.ref_controller_quat, controller_quat)
         return delta_xyz, delta_rot
 
     def get_state(self) -> Dict[str, Any]:
         return {
             "connected": self.ur is not None,
+            "simulate": self.simulate,
             "active": self.active,
             "tracking": self.tracking,
             "target_joints_deg": [math.degrees(float(v)) for v in self.target_q],

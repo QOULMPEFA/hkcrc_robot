@@ -6,8 +6,8 @@ from Quest 3 tracking data received via a swappable VR backend:
   - XRProtocolBackend (TCP via XRoboToolkit-Quest full APK — client_quest3)
 
 The arm control algorithm follows XR-Robotics: grip is the dead-man switch,
-controller pose is mapped with R_HEADSET_TO_WORLD, Placo solves IK, and UR
-RTDE sends continuous servoj() targets.
+controller pose is mapped with R_HEADSET_TO_WORLD, DH numerical IK solves
+joints, and UR RTDE sends continuous servoj() targets.
 """
 
 from teleoperation_sdk.teleop import TeleopModule

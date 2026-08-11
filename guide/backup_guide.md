@@ -1,3 +1,4 @@
 1. 同步 PC 与 Jetson 间代码。
 2. 参照 guide/git_info.md 执行备份（含版本 tag：`git tag -a vX.Y && git push --tags`）。
 3. 在 log/backuplog 目录下新建 Markdown 日志，文件名：YYYYMMDD_HHMMSS.md。
+4. 在 log/work 目录下新建 Markdown 日志，比如当前的进度、问题及接下来的工作，方便以后的AI Agent接手。
