@@ -211,10 +211,10 @@ def _pick_color_node(candidates: List[str]) -> str:
 def _get_sudo_input() -> str:
     try:
         from robot_control.web_gui import auth
-        pw = auth.get_setting("sudo_password", "orangepi")
-        return (pw + "\n") if pw else "orangepi\n"
+        pw = auth.get_setting("sudo_password", " ")
+        return (pw + "\n") if pw else " \n"
     except Exception:
-        return "orangepi\n"
+        return " \n"
 
 
 def _write_sysfs(path: str, value: str) -> None:

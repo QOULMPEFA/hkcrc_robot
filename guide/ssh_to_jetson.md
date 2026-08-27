@@ -1,7 +1,6 @@
 ## SSH & Connection
 
-- **局域网**: `192.168.20.63` | User: `yu` | Pass: `1114`（优先）
-- **外网**: `frp-all.com:35200` | User: `yu` | Pass: `1114`
+- **局域网**: `192.168.20.28` | User: `yu` | Pass: `1114`（优先）
 - Workspace: `/home/yu/robot_code`
 
 ### 免密登录（一次性配置）

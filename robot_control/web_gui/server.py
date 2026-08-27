@@ -357,8 +357,8 @@ def on_disconnect():
 
 def _get_sudo_password() -> str:
     """Return the configured sudo password (with trailing newline for stdin)."""
-    pw = auth.get_setting("sudo_password", "orangepi")
-    return pw + "\n" if pw else "orangepi\n"
+    pw = auth.get_setting("sudo_password", " ")
+    return pw + "\n" if pw else " \n"
 
 
 @socketio.on("restart_can")
@@ -448,10 +448,16 @@ def on_system_power(data):
     log.warning("[System] %s requested by user id=%s", action, uid)
     emit("system_power_result", {"action": action, "ok": True})
     import subprocess
-    if action == "reboot":
-        subprocess.Popen(f"echo {_get_sudo_password().strip()} | sudo -S systemctl reboot", shell=True)
-    else:
-        subprocess.Popen(f"echo {_get_sudo_password().strip()} | sudo -S systemctl poweroff", shell=True)
+    cmd = ["systemctl", "reboot"] if action == "reboot" else ["systemctl", "poweroff"]
+    sp = _get_sudo_password()
+    try:
+        proc = subprocess.Popen(["sudo", "-S"] + cmd,
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        proc.communicate(input=sp.encode(), timeout=10)
+    except Exception as e:
+        log.error("[System] %s command failed: %s", action, e)
 
 
 # ── state broadcast loop ──────────────────────────────────────────────────────
@@ -561,7 +567,6 @@ def main():
         "ugv":    {"host": "127.0.0.1", "port": 9100},
         "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
         "camera": {"auto_detect": True, "width": 1280, "height": 720},
-        "motor":  {},
         # port omitted = auto-detect RS485
         "hand":   {"protocol": "modbus", "baudrate": 460800, "slave_id": 0x7F},
         "teleop": {
