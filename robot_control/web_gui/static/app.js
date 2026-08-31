@@ -33,7 +33,8 @@ let ACTIVE_MODULES = [];
 // Joints in this Set are being edited in the browser. State broadcasts must
 // not overwrite their slider/number/value while the user is adjusting them.
 const _armDirtyJoints = new Map();
-const _UR5E_HOME_DEG = [90, 0, 90, -90, 90, -135];
+const _UR5E_HOME_DEG_LEFT = [90, 0, 90, -90, 90, -135]; // 左臂安装位（后续切换）
+const _UR5E_HOME_DEG = [-90, -180, -90, -90, -90, -135]; // 右臂镜像回零（当前）
 const _UR5E_DH = [
   { a: 0, alpha: Math.PI / 2, d: 89.459 },
   { a: -425, alpha: 0, d: 0 },
@@ -1261,7 +1262,7 @@ function _renderArmPanel(panelId, body) {
       <div class="arm-urdf-status" id="${panelId}-arm-urdf-status">URDF 加载中...</div>
       <div class="arm-urdf-model-inputs">
         <label>RX <input id="${panelId}-model-rot-x" type="number" step="1" value="0" /></label>
-        <label>RY <input id="${panelId}-model-rot-y" type="number" step="1" value="-45" /></label>
+        <label>RY <input id="${panelId}-model-rot-y" type="number" step="1" value="45" /></label>
         <label>RZ <input id="${panelId}-model-rot-z" type="number" step="1" value="90" /></label>
         <label>PX <input id="${panelId}-model-pos-x" type="number" step="0.01" value="0" /></label>
         <label>PY <input id="${panelId}-model-pos-y" type="number" step="0.01" value="0" /></label>
@@ -2727,9 +2728,10 @@ function _initUrdfScene(panelId, suffix, opts) {
     applyModelInputs();
   } else {
     // Keep the corrected model pose without exposing rotation inputs here.
+    // RY mirrors the mount: right arm +45, left arm -45.
     cache.modelAdjustFrame.rotation.set(
       0,
-      THREE.MathUtils.degToRad(-45),
+      THREE.MathUtils.degToRad(45),
       THREE.MathUtils.degToRad(90),
     );
   }
@@ -2737,7 +2739,7 @@ function _initUrdfScene(panelId, suffix, opts) {
   if (modelResetBtn && modelInputs) {
     modelResetBtn.addEventListener("click", () => {
       modelInputs.rx.value = "0";
-      modelInputs.ry.value = "-45";
+      modelInputs.ry.value = "45";
       modelInputs.rz.value = "90";
       modelInputs.px.value = "0";
       modelInputs.py.value = "0";
@@ -3691,6 +3693,14 @@ function _updateArmState(panelId, s) {
   if (afb) {
     afb.style.display = s.is_fault ? "inline-block" : "none";
     if (s.is_fault && s.fault_text) afb.title = s.fault_text;
+  }
+
+  // Speed slider — sync from server state (don't update while dragging)
+  const slSpeed = el(panelId + "-sl-arm-speed");
+  const lblSpeed = el(panelId + "-lbl-arm-speed");
+  if (slSpeed && !slSpeed.matches(":active") && typeof s.speed_pct === "number") {
+    slSpeed.value = s.speed_pct;
+    if (lblSpeed) lblSpeed.textContent = s.speed_pct;
   }
 
   // Collision sensitivity slider (don't update while user is dragging)

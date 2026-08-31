@@ -562,7 +562,7 @@ def main():
             "host": "192.168.56.101",
             "payload_mass": 0.5,
             "payload_cog": [0.0, 0.0, 0.05],
-            "home_angles_deg": [90.0, 0.0, 90.0, -90.0, 90.0, -135.0],
+            "home_angles_deg": [-90.0, -180.0, -90.0, -90.0, -90.0, -135.0],  # 右臂镜像回零
         },
         "ugv":    {"host": "127.0.0.1", "port": 9100},
         "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
@@ -573,7 +573,7 @@ def main():
         "hand":   {"protocol": "zqwl_canfd", "port": "/dev/ttyACM0", "slave_id": 0x7F},
         "teleop": {
             "host": "192.168.56.101",
-            "arm_controller": "left",         # installed left arm; right reserved
+            "arm_controller": "right",        # installed right arm; left reserved
             "vr_backend": "xrt",              # XRoboToolkit-PC-Service via xrobotoolkit_sdk
             "vr_backend_kwargs": {},
             "urdf_path": "teleoperation_sdk/XRoboToolkit-Teleop-Sample-Python/assets/universal_robots_ur5e/ur5e.urdf",

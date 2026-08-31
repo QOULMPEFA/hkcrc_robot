@@ -47,7 +47,10 @@ class ArmState:
 
 
 class ArmController(RobotModule):
-    HOME_ANGLES_DEG = [90.0, 0.0, 90.0, -90.0, 90.0, -135.0]
+    # 左臂安装位回零（后续安装左臂时切换使用）
+    HOME_ANGLES_DEG_LEFT = [90.0, 0.0, 90.0, -90.0, 90.0, -135.0]
+    # 右臂默认回零（当前安装）
+    HOME_ANGLES_DEG = [-90.0, -180.0, -90.0, -90.0, -90.0, -135.0]
     MAX_SPEED_PCT = 100.0
     LOG_CAPACITY = 80
     RECONNECT_INTERVAL = 3.0
@@ -526,8 +529,12 @@ class ArmController(RobotModule):
         self._add_log("info", f"碰撞检测灵敏度: {level:.2f}")
         if self._simulate:
             return
-        # Send URScript command to enable/disable hardware collision detection
+        # UR hardware collision sensitivity: LOWER value = MORE sensitive
+        # (robot stops on lighter contacts), 0 = disabled. The UI slider is
+        # inverted so a higher slider = more sensitive; never fully disable.
+        ur_sens = max(0.10, min(0.95, 1.0 - level))
         if self._collision_enabled:
+            self._send_urscript(f"set_collision_sensitivity({ur_sens:.2f})")
             self._send_urscript("set_collision_detection(True)")
         else:
             self._send_urscript("set_collision_detection(False)")
@@ -699,13 +706,14 @@ class ArmController(RobotModule):
         currents = self._state.joint_currents_a
         temps = self._state.joint_temps_c
         sensitivity = self._state.collision_sensitivity
-        # Conservative per-joint current thresholds (A) — lower sensitivity = higher threshold
+        # Conservative per-joint current thresholds (A). Higher sensitivity →
+        # lower threshold (more sensitive); at sens=1.0 threshold = base, at
+        # sens=0.05 threshold = 1.475×base (lenient).
         base_thresholds = [8.0, 12.0, 8.0, 4.0, 2.0, 2.0]
-        # sensitivity 1.0 → threshold halved (very sensitive); 0.1 → threshold doubled (lenient)
-        scale = 1.5 - sensitivity * 0.5  # 1.0 at sens=1.0, 1.45 at sens=0.1
+        factor = 1.5 - sensitivity * 0.5
         warning = ""
         for i in range(6):
-            limit = base_thresholds[i] / scale
+            limit = base_thresholds[i] * factor
             if abs(currents[i]) > limit:
                 warning = f"J{i+1} 电流异常: {currents[i]:.2f}A (阈值 {limit:.1f}A)"
         # Temperature check
