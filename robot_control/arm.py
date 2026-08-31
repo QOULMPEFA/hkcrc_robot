@@ -554,7 +554,7 @@ class ArmController(RobotModule):
                     self._state_sock = sock
                 log.info("[Arm] State reader connected to port %d", self._state_port)
                 self._sec_read_loop(sock)
-            except (OSError, ConnectionRefusedError) as e:
+            except Exception as e:
                 log.debug("[Arm] State reader connection failed: %s", e)
             finally:
                 with self._lock:
@@ -578,7 +578,10 @@ class ArmController(RobotModule):
                 buf += chunk
                 buf = self._sec_parse(buf)
             except socket.timeout:
-                pass
+                # UR streams robot state at 125 Hz; a 2 s silence means the
+                # stream died (UR serves only one secondary client). Force
+                # reconnect instead of reading a zombie socket forever.
+                break
             except OSError:
                 break
 
