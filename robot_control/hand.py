@@ -69,6 +69,9 @@ class HandController(RobotModule):
         self._candlelight_channel = int(cfg.get("candlelight_channel", 0))
         self._candlelight_bitrate = int(cfg.get("candlelight_bitrate", 1_000_000))
         self._candlelight_data_bitrate = int(cfg.get("candlelight_data_bitrate", 5_000_000))
+        # ZQWL USB-CAN-FD adapter config (CDC-ACM serial, CANFD 1M/5M)
+        self._zqwl_arb_bitrate = int(cfg.get("zqwl_arb_bitrate", 1_000_000))
+        self._zqwl_data_bitrate = int(cfg.get("zqwl_data_bitrate", 5_000_000))
         # Shared
         self._slave_id = int(cfg.get("slave_id", 0x02))
         # SocketCAN function references (set during _connect_can)
@@ -303,8 +306,12 @@ class HandController(RobotModule):
         try:
             if self._protocol == "can":
                 await self._connect_can()
+            elif self._protocol == "can_canfd":
+                await self._connect_can_fd()
             elif self._protocol == "can_candlelight":
                 await self._connect_candlelight()
+            elif self._protocol == "zqwl_canfd":
+                await self._connect_zqwl_canfd()
             else:
                 await self._connect_modbus()
 
@@ -407,6 +414,44 @@ class HandController(RobotModule):
 
         self._connected = True
 
+    async def _connect_can_fd(self) -> None:
+        """Connect via CANFD over SocketCAN (mttcan on Jetson, canfd=True)."""
+        import sys as _sys, os as _os
+
+        _sdk_path = _os.path.join(_os.path.dirname(__file__), "..",
+                                   "hand_brainco_sdk", "python", "revo2_canfd")
+        _sdk_path = _os.path.normpath(_sdk_path)
+        if _sdk_path not in _sys.path:
+            _sys.path.insert(0, _sdk_path)
+
+        from socketcan_linux_utils import socketcan_open as _fd_open, \
+            socketcan_close as _fd_close, \
+            socketcan_send_message as _fd_send, \
+            socketcan_receive_canfd_filtered as _fd_recv
+
+        _LIBSTARK.init_logging()
+
+        self._can_send_fn = _fd_send
+        self._can_recv_fn = _fd_recv
+        self._can_close_fn = _fd_close
+
+        # 1. Create device handler with CANFD protocol type FIRST
+        self._client = _LIBSTARK.init_device_handler(
+            _LIBSTARK.StarkProtocolType.CanFd, self._master_id)
+
+        # 2. Open SocketCAN in CANFD mode AFTER init_device_handler
+        _fd_open(self._can_iface)
+
+        # 3. Register TX/RX callbacks
+        _LIBSTARK.set_can_tx_callback(self._can_tx_callback)
+        _LIBSTARK.set_can_rx_callback(self._can_rx_callback)
+
+        # 4. Query device info
+        info = await self._client.get_device_info(self._slave_id)
+        log.info("[Hand] Device: %s", info.description if info else "?")
+
+        self._connected = True
+
     async def _connect_candlelight(self) -> None:
         """Connect via candleLight USB-CAN FD adapter (Windows/Linux)."""
         import sys as _sys, os as _os
@@ -450,6 +495,24 @@ class HandController(RobotModule):
 
         self._connected = True
 
+    async def _connect_zqwl_canfd(self) -> None:
+        """Connect via ZQWL USB-CAN-FD adapter (CDC-ACM serial, CANFD 1M/5M).
+
+        Transport init is synchronous and returns None; the device handler is
+        created afterwards via init_device_handler(CanFd, ...).
+        """
+        if _LIBSTARK is None:
+            raise RuntimeError("bc_stark_sdk not available")
+        _LIBSTARK.init_logging()
+        port = self._port or "/dev/ttyACM0"
+        _LIBSTARK.init_zqwl_canfd(port, self._zqwl_arb_bitrate,
+                                  self._zqwl_data_bitrate)
+        self._client = _LIBSTARK.init_device_handler(
+            _LIBSTARK.StarkProtocolType.CanFd, self._master_id)
+        info = await self._client.get_device_info(self._slave_id)
+        log.info("[Hand] Device: %s", info.description if info else "?")
+        self._connected = True
+
     # ── CAN TX/RX callbacks (called from SDK internals) ───────────────────
 
     def _can_tx_callback(self, _slave_id: int, can_id: int,
@@ -479,7 +542,7 @@ class HandController(RobotModule):
     async def _disconnect(self) -> None:
         if self._client:
             try:
-                if self._protocol in ("can", "can_candlelight"):
+                if self._protocol in ("can", "can_canfd", "can_candlelight", "zqwl_canfd"):
                     _LIBSTARK.close_device_handler(self._client)
                     if self._can_close_fn:
                         self._can_close_fn()

@@ -24,6 +24,7 @@ Protocol (per datagram to quest_ip:10004):
 import os
 import select
 import socket
+import sqlite3
 import struct
 import sys
 import threading
@@ -46,9 +47,12 @@ UDP_PORT = 10004
 # by the WiFi path — 60000-byte datagrams never arrived at the headset at all.
 MAX_CHUNK = 1400
 
-# Auth token for the robot server's MJPEG stream
-STREAM_TOKEN = "ae6642a3ed9a9be66cca7d50845e5498e70bdcce88847f11235fd8cb0dcd12e2"
+# The MJPEG stream endpoint requires the current control-panel session token.
+# Read it from the local auth DB so logins/token rotation do not break the feed.
 STREAM_BASE = "http://127.0.0.1:6080/stream"
+STREAM_DB_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "robot_control", "web_gui", "users.db")
+)
 
 # Holds the camera source id to forward. Written by start_realsense_quest.sh.
 SOURCE_FILE = "/tmp/realsense_bridge.source"
@@ -65,6 +69,21 @@ def _read_source(default=DEFAULT_SOURCE):
         return src or default
     except OSError:
         return default
+
+
+def _stream_token():
+    """Return any valid control-panel session token for local stream access."""
+    try:
+        with sqlite3.connect(STREAM_DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT session_token FROM users "
+                "WHERE session_token IS NOT NULL AND session_token != '' "
+                "LIMIT 1"
+            ).fetchone()
+        return row[0] if row else ""
+    except Exception as e:
+        print(f"[bridge] stream token lookup failed: {e}")
+        return ""
 
 
 def _iter_jpeg_frames(response):
@@ -114,7 +133,7 @@ def udp_stream(quest_ip, udp_port, stop_event):
     try:
         while not stop_event.is_set():
             source = _read_source()
-            url = f"{STREAM_BASE}/{source}?token={STREAM_TOKEN}"
+            url = f"{STREAM_BASE}/{source}?token={_stream_token()}"
             print(f"[bridge] connecting to MJPEG stream: {STREAM_BASE}/{source}")
 
             try:

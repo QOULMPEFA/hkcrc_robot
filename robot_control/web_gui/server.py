@@ -566,9 +566,11 @@ def main():
         },
         "ugv":    {"host": "127.0.0.1", "port": 9100},
         "lift":   {"can_channel": "can0", "node_id": 1, "home_strategy": "current_pos"},
-        "camera": {"auto_detect": True, "width": 1280, "height": 720},
-        # port omitted = auto-detect RS485
-        "hand":   {"protocol": "modbus", "baudrate": 460800, "slave_id": 0x7F},
+        # RealSense 455: /dev/video4 = 彩色(yuyv422), /dev/video0 = 深度(gray16le)
+        "camera": {"sources": [{"id": "cam0", "type": "usb", "device": "/dev/video4",
+                                "width": 1280, "height": 720}]},
+        # ZQWL USB-CAN-FD 适配器 (/dev/ttyACM0), CANFD 1M/5M, Revo1 slave 0x7F
+        "hand":   {"protocol": "zqwl_canfd", "port": "/dev/ttyACM0", "slave_id": 0x7F},
         "teleop": {
             "host": "192.168.56.101",
             "arm_controller": "left",         # installed left arm; right reserved
